@@ -1,0 +1,13 @@
+You started with setting up your Evntly project, a multi-organizer event management API built on Cloudflare Workers using the Hono framework. The goal is to allow multiple organizers to create, fetch, and manage events efficiently. You initially scaffolded the project using Wrangler and chose an API starter template. Docker was considered for development but later set aside to simplify local testing.
+
+The plan for the database involves using Neon (Postgres) and Drizzle ORM. Initially, you wanted the service to be authless for rapid development, but organizers would eventually have authentication to manage their events. Key tables identified include Users, Organizers, Clubs, Activities, and Activity Registrations, with considerations for media arrays (images, videos), venues, maps, slots, registration fees, and activity schedules.
+
+You decided to remove the separate ActivityType table and instead store a type field in Activities with recurring support. Activity status will be dynamic (upcoming, live, completed, cancelled). Payments and email/notification tables were added, with payments including provider and mode information, and notifications tracking reason, status, and timestamps.
+
+The schema was refined to be production-ready with snake_case naming, soft deletes, clear defaults, and future support for authentication. Users will remain authless for now, with the option to add password and email verification later. Organizers are a separate table linked to Users and Clubs, supporting multi-tenancy and clean relationships.
+
+A secret key feature was added for organizers to access their data, with key rotation planned every 14 days and optional manual rotation. Emails will be sent to organizers with the secret key whenever it rotates. You considered encryption but decided for the MVP to rely on TLS email transport.
+
+For sending emails, free options were discussed. Gmail SMTP is the simplest forever-free solution, while SendGrid provides a 60-day free trial with 100 emails/day. Resend was highlighted as a free, developer-friendly alternative with up to 3,000 emails/month and easy integration.
+
+The conversation concluded with plans to integrate the secret key rotation and email sending securely while keeping the system authless initially, and ensuring that the schema and API design remain future-ready for authentication and production use.

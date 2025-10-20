@@ -1,0 +1,27 @@
+{
+	"name": "evntly",
+	"version": "0.0.0",
+	"private": true,
+	"scripts": {
+		"deploy": "wrangler deploy",
+		"dev": "wrangler dev",
+		"start": "wrangler dev",
+		"test": "vitest",
+		"cf-typegen": "wrangler types",
+		"db:create": "drizzle-kit generate",
+		"db:push": "drizzle-kit push"
+	},
+	"devDependencies": {
+		"@cloudflare/vitest-pool-workers": "^0.8.19",
+		"dotenv": "^16.4.5",
+		"typescript": "^5.5.2",
+		"vitest": "~3.2.0",
+		"wrangler": "^4.43.0"
+	},
+	"dependencies": {
+		"@neondatabase/serverless": "^1.0.2",
+		"drizzle-kit": "^0.31.5",
+		"drizzle-orm": "^0.44.6",
+		"hono": "^4.10.1"
+	}
+}

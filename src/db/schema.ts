@@ -1,7 +1,7 @@
-import { pgTable, serial, integer, bigint, varchar, timestamp, jsonb, boolean, numeric, text, pgEnum } from 'drizzle-orm/pg-core';
+import { pgTable, serial, integer, bigint, varchar, timestamp, jsonb, boolean, numeric, text, pgEnum, uuid } from 'drizzle-orm/pg-core';
 
 // -------------------- ENUMS --------------------
-export const ActivityStatus = pgEnum('activity_status', ['active', 'canceled', 'completed', 'upcoming', 'live']);
+export const ActivityStatus = pgEnum('activity_status', ['upcoming', 'live', 'completed', 'canceled']);
 export const RegistrationStatus = pgEnum('registration_status', ['registered', 'canceled', 'attended']);
 export const PaymentStatus = pgEnum('payment_status', ['pending', 'completed', 'failed']);
 export const NotificationStatus = pgEnum('notification_status', ['pending', 'sent', 'failed']);
@@ -9,7 +9,7 @@ export const ActivityType = pgEnum('activity_type', ['one-time', 'recurring']);
 
 // -------------------- USERS --------------------
 export const users = pgTable('users', {
-	id: bigint('id', { mode: 'number' }).primaryKey(),
+	id: uuid('id').defaultRandom().primaryKey(),
 	firstName: varchar('first_name', { length: 100 }).notNull(),
 	lastName: varchar('last_name', { length: 100 }).notNull(),
 	phone: varchar('phone', { length: 20 }).unique(),
@@ -25,22 +25,25 @@ export const users = pgTable('users', {
 
 // -------------------- ORGANIZERS --------------------
 export const organizers = pgTable('organizers', {
-	id: bigint('id', { mode: 'number' }).primaryKey(),
-	userId: bigint('user_id', { mode: 'number' }).references(() => users.id),
-	secretKey: varchar('secret_key', { length: 500 }).notNull(), // JWT token (longer for JWT)
+	id: uuid('id').defaultRandom().primaryKey(),
+	userId: uuid('user_id').references(() => users.id),
 	organizationName: varchar('organization_name', { length: 255 }).notNull(),
 	organizerEmail: varchar('organizer_email', { length: 255 }).notNull(), // Email for sending to users
+	systemEmail: varchar('system_email', { length: 255 }), // System/no-reply email for automated messages
+	websiteDomain: varchar('website_domain', { length: 255 }), // Website domain for origin-based scoping
+	resendApiKey: varchar('resend_api_key', { length: 500 }), // Organizer's Resend API key
+	razorpayKeyId: varchar('razorpay_key_id', { length: 255 }), // Organizer's Razorpay Key ID
+	razorpayKeySecret: varchar('razorpay_key_secret', { length: 255 }), // Organizer's Razorpay Key Secret
 	isActive: boolean('is_active').default(true).notNull(),
 	createdAt: timestamp('created_at').defaultNow().notNull(),
 	updatedAt: timestamp('updated_at').defaultNow().notNull(),
-	secretKeyLastRotated: timestamp('secret_key_last_rotated').defaultNow().notNull(),
 	deletedAt: timestamp('deleted_at'),
 });
 
 // -------------------- CLUBS --------------------
 export const clubs = pgTable('clubs', {
-	id: bigint('id', { mode: 'number' }).primaryKey(),
-	organizerId: bigint('organizer_id', { mode: 'number' }).references(() => organizers.id),
+	id: uuid('id').defaultRandom().primaryKey(),
+	organizerId: uuid('organizer_id').references(() => organizers.id),
 	name: varchar('name', { length: 255 }).notNull(),
 	description: text('description'),
 	imageUrls: jsonb('image_urls').default('[]'),
@@ -53,8 +56,9 @@ export const clubs = pgTable('clubs', {
 
 // -------------------- ACTIVITIES --------------------
 export const activities = pgTable('activities', {
-	id: bigint('id', { mode: 'number' }).primaryKey(),
-	clubId: bigint('club_id', { mode: 'number' }).references(() => clubs.id),
+	id: uuid('id').defaultRandom().primaryKey(),
+	clubId: uuid('club_id').references(() => clubs.id),
+	organizerId: uuid('organizer_id').references(() => organizers.id), // Direct link to organizer
 	name: varchar('name', { length: 255 }).notNull(),
 	slug: varchar('slug', { length: 255 }).notNull().unique(),
 	description: text('description'),
@@ -70,7 +74,7 @@ export const activities = pgTable('activities', {
 	bookedSlots: integer('booked_slots').default(0),
 	registrationFee: integer('registration_fee').default(0), // Paise
 	isRegistrationOpen: boolean('is_registration_open').default(true).notNull(),
-	status: ActivityStatus('status').default('active').notNull(),
+	status: ActivityStatus('status').default('upcoming').notNull(),
 	isActive: boolean('is_active').default(true).notNull(),
 	createdAt: timestamp('created_at').defaultNow().notNull(),
 	updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -79,8 +83,8 @@ export const activities = pgTable('activities', {
 
 // -------------------- ACTIVITY SCHEDULES --------------------
 export const activitySchedules = pgTable('activity_schedules', {
-	id: bigint('id', { mode: 'number' }).primaryKey(),
-	activityId: bigint('activity_id', { mode: 'number' }).references(() => activities.id),
+	id: uuid('id').defaultRandom().primaryKey(),
+	activityId: uuid('activity_id').references(() => activities.id),
 	dayOfWeek: varchar('day_of_week', { length: 10 }).notNull(), // e.g., 'Monday'
 	startTime: timestamp('start_time').notNull(),
 	endTime: timestamp('end_time').notNull(),
@@ -91,9 +95,9 @@ export const activitySchedules = pgTable('activity_schedules', {
 
 // -------------------- ACTIVITY REGISTRATIONS --------------------
 export const activityRegistrations = pgTable('activity_registrations', {
-	id: bigint('id', { mode: 'number' }).primaryKey(),
-	activityId: bigint('activity_id', { mode: 'number' }).references(() => activities.id),
-	userId: bigint('user_id', { mode: 'number' }).references(() => users.id),
+	id: uuid('id').defaultRandom().primaryKey(),
+	activityId: uuid('activity_id').references(() => activities.id),
+	userId: uuid('user_id').references(() => users.id),
 	status: RegistrationStatus('status').default('registered').notNull(),
 	ticketCount: integer('ticket_count').default(1).notNull(),
 	registeredAt: timestamp('registered_at').defaultNow().notNull(),
@@ -103,9 +107,9 @@ export const activityRegistrations = pgTable('activity_registrations', {
 
 // -------------------- CLUB MEMBERS --------------------
 export const clubMembers = pgTable('club_members', {
-	id: bigint('id', { mode: 'number' }).primaryKey(),
-	clubId: bigint('club_id', { mode: 'number' }).references(() => clubs.id),
-	userId: bigint('user_id', { mode: 'number' }).references(() => users.id),
+	id: uuid('id').defaultRandom().primaryKey(),
+	clubId: uuid('club_id').references(() => clubs.id),
+	userId: uuid('user_id').references(() => users.id),
 	role: varchar('role', { length: 50 }).default('member').notNull(),
 	joinedAt: timestamp('joined_at').defaultNow().notNull(),
 	isActive: boolean('is_active').default(true).notNull(),
@@ -114,8 +118,8 @@ export const clubMembers = pgTable('club_members', {
 
 // -------------------- PAYMENTS --------------------
 export const payments = pgTable('payments', {
-	id: bigint('id', { mode: 'number' }).primaryKey(),
-	registrationId: bigint('registration_id', { mode: 'number' }).references(() => activityRegistrations.id),
+	id: uuid('id').defaultRandom().primaryKey(),
+	registrationId: uuid('registration_id').references(() => activityRegistrations.id),
 	amount: numeric('amount', { precision: 10, scale: 2 }).notNull(),
 	status: PaymentStatus('status').default('pending').notNull(),
 	paymentMethod: varchar('payment_method', { length: 50 }).notNull(),
@@ -127,8 +131,8 @@ export const payments = pgTable('payments', {
 
 // -------------------- EMAILS / NOTIFICATIONS --------------------
 export const notifications = pgTable('notifications', {
-	id: bigint('id', { mode: 'number' }).primaryKey(),
-	userId: bigint('user_id', { mode: 'number' }).references(() => users.id),
+	id: uuid('id').defaultRandom().primaryKey(),
+	userId: uuid('user_id').references(() => users.id),
 	reason: varchar('reason', { length: 100 }).notNull(),
 	status: NotificationStatus('status').default('pending').notNull(),
 	sentAt: timestamp('sent_at'),

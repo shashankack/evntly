@@ -151,5 +151,34 @@ export function getRegistrationEmailHTML(data: RegistrationEmailData): string {
 }
 
 export function getRegistrationEmailSubject(activityName: string): string {
-	return `✅ Registration Confirmed - ${activityName}`;
+	return `Registration Confirmed - ${activityName}`;
+}
+
+export function getRegistrationEmailText(data: RegistrationEmailData): string {
+	const { userName, activityName, organizationName, ticketCount, registrationDate, venueName, additionalInfo } = data;
+
+	return `
+Registration Confirmed!
+
+Dear ${userName},
+
+Thank you for registering! Your registration has been confirmed.
+
+Activity: ${activityName}
+Organized by: ${organizationName}
+Tickets: ${ticketCount}
+Registration Date: ${registrationDate}
+${venueName ? `Venue: ${venueName}` : ''}
+
+${additionalInfo ? `Additional Information:\n${additionalInfo}` : ''}
+
+Please keep this email for your records. You may need to present it at the event.
+
+If you have any questions, please reply to this email.
+
+Best regards,
+${organizationName}
+
+© ${new Date().getFullYear()} ${organizationName}. Powered by Evntly.
+	`.trim();
 }

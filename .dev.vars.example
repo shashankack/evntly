@@ -13,10 +13,10 @@ SYSTEM_EMAIL=system@evntly.app
 # Cron Job Protection
 CRON_SECRET=your-cron-secret-for-auto-rotation
 
-# Payment Configuration
-PAYMENT_METHOD=manual
+# Frontend URL
 FRONTEND_URL=https://evntly.app
 
-# Optional: For Razorpay integration
-# RAZORPAY_KEY_ID=your_razorpay_key
-# RAZORPAY_KEY_SECRET=your_razorpay_secret
+# Note: Payment method is automatically determined based on organizer's Razorpay credentials in database
+# If organizer has razorpayKeyId and razorpayKeySecret, payment gateway (Razorpay) will be used
+# Otherwise, manual payment process will be used
+# For free activities (registrationFee = 0), no payment is required

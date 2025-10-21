@@ -1,20 +1,21 @@
 // src/routes/register.ts
 import { Hono } from 'hono';
 import { db } from '../db/client';
-import { activities, activityRegistrations, activitySchedules, payments, users } from '../db/schema';
+import { activities, activityRegistrations, activitySchedules, payments, users, organizers } from '../db/schema';
 import { eq, and, sql } from 'drizzle-orm';
-import { organizerAuth } from '../middleware/organizerAuth';
+import { originResolver } from '../middleware/originResolver';
 import { generateSecureRandomId } from '../utils/idGenerator';
+import { sendRegistrationEmail } from '../utils/email';
 
-const PAYMENT_METHOD = process.env.PAYMENT_METHOD || 'manual';
 const app = new Hono();
 
-app.use('*', organizerAuth);
+// Resolve organizer from Origin/Host header for domain-scoped requests
+app.use('*', originResolver);
 
 app.post('/activities/:id/register', async (c) => {
 	try {
-		const activityId = Number(c.req.param('id'));
-		if (isNaN(activityId)) return c.json({ error: 'Invalid activity ID' }, 400);
+		const activityId = c.req.param('id');
+		if (!activityId || typeof activityId !== 'string') return c.json({ error: 'Invalid activity ID' }, 400);
 
 		const body = await c.req.json<{
 			firstName: string;
@@ -31,7 +32,41 @@ app.post('/activities/:id/register', async (c) => {
 		const [activity] = await db.select().from(activities).where(eq(activities.id, activityId)).limit(1).execute();
 
 		if (!activity) return c.json({ error: 'Activity not found' }, 404);
-		
+
+		// Get organizer info for email and payment configuration
+		let organizer = null;
+		if (activity.organizerId) {
+			console.log('🔍 Fetching organizer with ID:', activity.organizerId);
+			[organizer] = await db
+				.select()
+				.from(organizers)
+				.where(eq(organizers.id, activity.organizerId))
+				.limit(1)
+				.execute();
+			
+			if (organizer) {
+				console.log('✅ Organizer found:', {
+					id: organizer.id,
+					organizationName: organizer.organizationName,
+					organizerEmail: organizer.organizerEmail,
+					systemEmail: organizer.systemEmail,
+					hasResendApiKey: !!organizer.resendApiKey,
+					resendApiKeyPreview: organizer.resendApiKey ? `${organizer.resendApiKey.substring(0, 10)}...` : null,
+				});
+			} else {
+				console.log('⚠️ Organizer not found for activity.organizerId:', activity.organizerId);
+			}
+		} else {
+			console.log('⚠️ Activity has no organizerId');
+		}
+
+		// Determine payment method based on organizer's Razorpay credentials
+		// If both razorpayKeyId and razorpayKeySecret exist, use 'razorpay', otherwise 'manual'
+		const paymentMethod = 
+			organizer?.razorpayKeyId && organizer?.razorpayKeySecret 
+				? 'razorpay' 
+				: 'manual';
+
 		// For recurring activities, check if registration is open
 		// For one-time activities, check status as well
 		if (!activity.isRegistrationOpen) {
@@ -40,7 +75,7 @@ app.post('/activities/:id/register', async (c) => {
 
 		if (activity.type === 'one-time') {
 			// For one-time activities, check status
-			if (!['active', 'upcoming'].includes(activity.status)) {
+			if (!['upcoming', 'live'].includes(activity.status)) {
 				return c.json({ error: 'Registration closed for this activity' }, 400);
 			}
 		} else if (activity.type === 'recurring') {
@@ -52,6 +87,13 @@ app.post('/activities/:id/register', async (c) => {
 		const bookedSlots = activity.bookedSlots ?? 0;
 		const availableSlots = activity.availableSlots ?? 0;
 		const registrationFee = activity.registrationFee ?? 0;
+
+		console.log('💰 Activity pricing details:', {
+			activityName: activity.name,
+			registrationFee,
+			isFree: registrationFee === 0,
+			paymentMethod: organizer?.razorpayKeyId && organizer?.razorpayKeySecret ? 'razorpay' : 'manual',
+		});
 
 		// Find or create user
 		let [user] =
@@ -121,10 +163,60 @@ app.post('/activities/:id/register', async (c) => {
 				.returning();
 		}
 
+		console.log('📝 Registration completed. Now checking payment requirements...');
+		console.log('Registration fee:', registrationFee, '| Is free?', registrationFee === 0);
+		console.log('User email:', email, '| Has organizer?', !!organizer);
+
 		// ------------------------
-		// Free OR manual payment registration
+		// Send confirmation email for ALL registrations
 		// ------------------------
-		if (registrationFee === 0 || PAYMENT_METHOD === 'manual') {
+		if (email && organizer) {
+			console.log('📧 Attempting to send confirmation email to:', email);
+			console.log('Organizer details:', {
+				organizationName: organizer.organizationName,
+				organizerEmail: organizer.organizerEmail,
+				hasResendApiKey: !!organizer.resendApiKey,
+				hasSystemEmail: !!organizer.systemEmail,
+			});
+
+			try {
+				const emailResult = await sendRegistrationEmail(
+					email,
+					`${firstName} ${lastName}`,
+					activity.name,
+					organizer.organizationName,
+					organizer.organizerEmail,
+					ticketCount,
+					activity.venueName || undefined,
+					typeof activity.additionalInfo === 'string' ? activity.additionalInfo : undefined,
+					organizer.resendApiKey, // Pass organizer's Resend API key
+					organizer.systemEmail // Pass organizer's system email
+				);
+				
+				if (emailResult.success) {
+					console.log('✅ Registration confirmation email sent successfully to:', email, 'MessageId:', emailResult.messageId);
+				} else {
+					console.error('❌ Failed to send registration email:', emailResult.error);
+				}
+			} catch (emailError) {
+				console.error('❌ Exception while sending registration email:', emailError);
+				// Don't fail the registration if email fails
+			}
+		} else {
+			if (!email) {
+				console.log('⚠️ No email provided by user, skipping confirmation email');
+			}
+			if (!organizer) {
+				console.log('⚠️ No organizer found, skipping confirmation email');
+			}
+		}
+
+		// ------------------------
+		// Free activity registration (no payment needed)
+		// ------------------------
+		if (registrationFee === 0) {
+			console.log('🎉 Processing FREE activity registration - completing immediately');
+			
 			await db
 				.update(activities)
 				.set({
@@ -145,8 +237,11 @@ app.post('/activities/:id/register', async (c) => {
 		}
 
 		// ------------------------
-		// Paid gateway registration
+		// Paid activity registration (razorpay or manual)
 		// ------------------------
+		console.log('💳 Processing PAID activity registration - payment information will be provided');
+		console.log('Payment method:', paymentMethod);
+		
 		const paymentId = generateSecureRandomId();
 		const [payment] = await db
 			.insert(payments)
@@ -155,12 +250,12 @@ app.post('/activities/:id/register', async (c) => {
 				registrationId: registration.id,
 				amount: String((registrationFee / 100) * additionalTickets),
 				status: 'pending',
-				paymentMethod: PAYMENT_METHOD,
+				paymentMethod: paymentMethod,
 			})
 			.returning();
 
 		let paymentInfo: Record<string, any> = {};
-		if (PAYMENT_METHOD === 'razorpay') {
+		if (paymentMethod === 'razorpay') {
 			paymentInfo = {
 				type: 'razorpay',
 				orderId: `order_${payment.id}`,

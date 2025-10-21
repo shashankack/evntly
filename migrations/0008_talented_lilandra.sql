@@ -1,0 +1,1 @@
+ALTER TABLE "organizers" ADD COLUMN "resend_api_key" varchar(500);

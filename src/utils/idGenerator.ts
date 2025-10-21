@@ -10,13 +10,14 @@ export function generateRandomId(): number {
 }
 
 /**
- * Generate a cryptographically secure random ID
- * Uses crypto.getRandomValues for better randomness
+ * Generate a cryptographically secure UUID (v4)
  */
-export function generateSecureRandomId(): number {
-	// Generate 10-digit random number using crypto
-	const array = new Uint32Array(1);
-	crypto.getRandomValues(array);
-	// Scale to 10 digits
-	return 1000000000 + (array[0] % 9000000000);
+export function generateSecureRandomId(): string {
+	// Use crypto API to generate a UUID v4 string
+	// https://stackoverflow.com/a/2117523/6463558
+	return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+		const r = crypto.getRandomValues(new Uint8Array(1))[0] % 16;
+		const v = c === 'x' ? r : (r & 0x3 | 0x8);
+		return v.toString(16);
+	});
 }

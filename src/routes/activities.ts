@@ -3,18 +3,19 @@ import { Hono } from 'hono';
 import { db } from '../db/client';
 import { organizers, clubs, activities, activitySchedules } from '../db/schema';
 import { eq, and, inArray, asc, desc, sql, gte, lte } from 'drizzle-orm';
-import { organizerAuth } from '../middleware/organizerAuth';
+import { originResolver } from '../middleware/originResolver';
 import { generateSecureRandomId } from '../utils/idGenerator';
 
 interface Env {
 	Variables: {
-		organizer: any; // Adjust type as needed based on organizerAuth middleware
+		organizer: any;
 	};
 }
 
 const app = new Hono<Env>();
 
-app.use('*', organizerAuth);
+// Use domain-based authentication for all routes
+app.use('*', originResolver);
 
 // Helper function to calculate current status for recurring activities
 function getRecurringActivityStatus(schedules: any[]): 'upcoming' | 'live' | 'completed' {
@@ -68,26 +69,25 @@ app.get('/activities', async (c) => {
 	try {
 		const organizer = c.get('organizer');
 
+		if (!organizer) {
+			return c.json({ error: 'No organizer found for this domain' }, 404);
+		}
+
 		// Extract query parameters
 		const { status, type, clubId, page = '1', limit = '10', sortBy = 'createdAt', order = 'desc' } = c.req.query();
 
-		// Get all clubs for this organizer
-		const organizerClubs = await db.select().from(clubs).where(eq(clubs.organizerId, organizer.id)).execute();
+		// Dynamic filter conditions - activities belong to this organizer directly OR through a club
+		const conditions = [eq(activities.organizerId, organizer.id), eq(activities.isActive, true)];
 
-		let clubIds = organizerClubs.map((club) => club.id);
-
+		// If specific clubId requested, filter by it
 		if (clubId) {
-			const clubNum = Number(clubId);
-			if (!clubIds.includes(clubNum)) return c.json({ activities: [] });
-			clubIds = [clubNum];
+			conditions.push(eq(activities.clubId, clubId));
 		}
 
-		// Dynamic filter conditions
-		const conditions = [inArray(activities.clubId, clubIds)];
-		const validStatuses = ['active', 'canceled', 'completed', 'upcoming', 'live'] as const;
+		const validStatuses = ['upcoming', 'live', 'completed', 'canceled'] as const;
 		if (status && validStatuses.includes(status as (typeof validStatuses)[number]))
 			conditions.push(eq(activities.status, status as (typeof validStatuses)[number]));
-		
+
 		const validTypes = ['one-time', 'recurring'] as const;
 		if (type && validTypes.includes(type as (typeof validTypes)[number]))
 			conditions.push(eq(activities.type, type as (typeof validTypes)[number]));
@@ -117,11 +117,7 @@ app.get('/activities', async (c) => {
 		const enrichedActivities = await Promise.all(
 			activitiesList.map(async (activity) => {
 				if (activity.type === 'recurring') {
-					const schedules = await db
-						.select()
-						.from(activitySchedules)
-						.where(eq(activitySchedules.activityId, activity.id))
-						.execute();
+					const schedules = await db.select().from(activitySchedules).where(eq(activitySchedules.activityId, activity.id)).execute();
 
 					const dynamicStatus = getRecurringActivityStatus(schedules);
 
@@ -159,7 +155,7 @@ app.get('/activities/:id', async (c) => {
 			.select()
 			.from(activities)
 			.innerJoin(clubs, eq(clubs.id, activities.clubId))
-			.where(and(eq(activities.id, activityId), eq(clubs.organizerId, organizer.id)))
+			.where(and(eq(activities.id, String(activityId)), eq(clubs.organizerId, organizer.id)))
 			.limit(1)
 			.execute();
 
@@ -171,27 +167,33 @@ app.get('/activities/:id', async (c) => {
 			const schedules = await db
 				.select()
 				.from(activitySchedules)
-				.where(eq(activitySchedules.activityId, activityId))
+				.where(eq(activitySchedules.activityId, String(activityId)))
 				.execute();
 
 			const dynamicStatus = getRecurringActivityStatus(schedules);
 
-			return c.json({
+			return c.json(
+				{
+					activity: {
+						...activity.activities,
+						club: activity.clubs,
+						schedules,
+						currentStatus: dynamicStatus,
+					},
+				},
+				200
+			);
+		}
+
+		return c.json(
+			{
 				activity: {
 					...activity.activities,
 					club: activity.clubs,
-					schedules,
-					currentStatus: dynamicStatus,
 				},
-			}, 200);
-		}
-
-		return c.json({
-			activity: {
-				...activity.activities,
-				club: activity.clubs,
 			},
-		}, 200);
+			200
+		);
 	} catch (error) {
 		console.error('Error fetching activity:', error);
 		return c.json({ error: 'Internal Server Error' }, 500);
@@ -207,6 +209,10 @@ app.get('/activities/:id', async (c) => {
 app.post('/activities', async (c) => {
 	try {
 		const organizer = c.get('organizer');
+
+		if (!organizer) {
+			return c.json({ error: 'No organizer found for this domain' }, 404);
+		}
 		const body = await c.req.json();
 
 		const {
@@ -258,7 +264,7 @@ app.post('/activities', async (c) => {
 		const activityId = generateSecureRandomId();
 
 		// Determine initial status
-		let initialStatus: 'upcoming' | 'live' | 'active' = 'upcoming';
+		let initialStatus: 'upcoming' | 'live' | 'completed' = 'upcoming';
 		if (type === 'one-time') {
 			const now = new Date();
 			const start = new Date(startDateTime);
@@ -267,7 +273,7 @@ app.post('/activities', async (c) => {
 			if (now >= start && now <= end) {
 				initialStatus = 'live';
 			} else if (now > end) {
-				initialStatus = 'active'; // Set as active, but organizer might want to mark completed
+				initialStatus = 'completed'; // Past events are completed
 			}
 		}
 
@@ -325,6 +331,11 @@ app.post('/activities', async (c) => {
 app.put('/activities/:id', async (c) => {
 	try {
 		const organizer = c.get('organizer');
+
+		if (!organizer) {
+			return c.json({ error: 'No organizer found for this domain' }, 404);
+		}
+
 		const activityId = Number(c.req.param('id'));
 		if (isNaN(activityId)) return c.json({ error: 'Invalid activity id' }, 400);
 
@@ -335,7 +346,7 @@ app.put('/activities/:id', async (c) => {
 			.select()
 			.from(activities)
 			.innerJoin(clubs, eq(clubs.id, activities.clubId))
-			.where(and(eq(activities.id, activityId), eq(clubs.organizerId, organizer.id)))
+			.where(and(eq(activities.id, String(activityId)), eq(clubs.organizerId, organizer.id)))
 			.limit(1)
 			.execute();
 
@@ -373,14 +384,17 @@ app.put('/activities/:id', async (c) => {
 		const [updatedActivity] = await db
 			.update(activities)
 			.set(updateData)
-			.where(eq(activities.id, activityId))
+			.where(eq(activities.id, String(activityId)))
 			.returning()
 			.execute();
 
 		// Handle schedule updates for recurring activities
 		if (existingActivity.type === 'recurring' && body.schedules) {
 			// Delete existing schedules
-			await db.delete(activitySchedules).where(eq(activitySchedules.activityId, activityId)).execute();
+			await db
+				.delete(activitySchedules)
+				.where(eq(activitySchedules.activityId, String(activityId)))
+				.execute();
 
 			// Insert new schedules
 			if (body.schedules.length > 0) {
@@ -410,6 +424,11 @@ app.put('/activities/:id', async (c) => {
 app.delete('/activities/:id', async (c) => {
 	try {
 		const organizer = c.get('organizer');
+
+		if (!organizer) {
+			return c.json({ error: 'No organizer found for this domain' }, 404);
+		}
+
 		const activityId = Number(c.req.param('id'));
 		if (isNaN(activityId)) return c.json({ error: 'Invalid activity id' }, 400);
 
@@ -418,7 +437,7 @@ app.delete('/activities/:id', async (c) => {
 			.select()
 			.from(activities)
 			.innerJoin(clubs, eq(clubs.id, activities.clubId))
-			.where(and(eq(activities.id, activityId), eq(clubs.organizerId, organizer.id)))
+			.where(and(eq(activities.id, String(activityId)), eq(clubs.organizerId, organizer.id)))
 			.limit(1)
 			.execute();
 
@@ -431,7 +450,7 @@ app.delete('/activities/:id', async (c) => {
 				isActive: false,
 				deletedAt: new Date(),
 			})
-			.where(eq(activities.id, activityId))
+			.where(eq(activities.id, String(activityId)))
 			.execute();
 
 		return c.json({ message: 'Activity deleted successfully' }, 200);
@@ -453,7 +472,7 @@ app.patch('/activities/:id/status', async (c) => {
 		if (isNaN(activityId)) return c.json({ error: 'Invalid activity id' }, 400);
 
 		const { status } = await c.req.json();
-		const validStatuses = ['active', 'canceled', 'completed', 'upcoming', 'live'] as const;
+		const validStatuses = ['upcoming', 'live', 'completed', 'canceled'] as const;
 
 		if (!status || !validStatuses.includes(status as any)) {
 			return c.json({ error: 'Invalid status' }, 400);
@@ -464,7 +483,7 @@ app.patch('/activities/:id/status', async (c) => {
 			.select()
 			.from(activities)
 			.innerJoin(clubs, eq(clubs.id, activities.clubId))
-			.where(and(eq(activities.id, activityId), eq(clubs.organizerId, organizer.id)))
+			.where(and(eq(activities.id, String(activityId)), eq(clubs.organizerId, organizer.id)))
 			.limit(1)
 			.execute();
 
@@ -474,16 +493,19 @@ app.patch('/activities/:id/status', async (c) => {
 
 		// Only allow status updates for one-time activities
 		if (activity.type === 'recurring') {
-			return c.json({ 
-				error: 'Cannot manually update status for recurring activities. Status is calculated dynamically based on schedules.',
-			}, 400);
+			return c.json(
+				{
+					error: 'Cannot manually update status for recurring activities. Status is calculated dynamically based on schedules.',
+				},
+				400
+			);
 		}
 
 		// Update status
 		const [updatedActivity] = await db
 			.update(activities)
 			.set({ status, updatedAt: new Date() })
-			.where(eq(activities.id, activityId))
+			.where(eq(activities.id, String(activityId)))
 			.returning()
 			.execute();
 

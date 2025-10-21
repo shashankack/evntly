@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { db } from '../db/client';
 import { clubs } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
-import { organizerAuth } from '../middleware/organizerAuth';
+import { originResolver } from '../middleware/originResolver';
 import { generateSecureRandomId } from '../utils/idGenerator';
 
 interface Env {
@@ -14,13 +14,17 @@ interface Env {
 
 const app = new Hono<Env>();
 
-// Apply middleware to all routes
-app.use('*', organizerAuth);
+// Use domain-based authentication for all routes
+app.use('*', originResolver);
 
-// GET /clubs - list all clubs for the authenticated organizer
+// GET /clubs - list all clubs for the organizer
 app.get('/clubs', async (c) => {
 	try {
-		const organizer = c.get('organizer'); // already validated
+		const organizer = c.get('organizer');
+
+		if (!organizer) {
+			return c.json({ error: 'No organizer found for this domain' }, 404);
+		}
 		const clubsList = await db
 			.select()
 			.from(clubs)
@@ -38,8 +42,12 @@ app.get('/clubs', async (c) => {
 app.get('/clubs/:id', async (c) => {
 	try {
 		const organizer = c.get('organizer');
-		const clubId = Number(c.req.param('id'));
-		if (isNaN(clubId)) return c.json({ error: 'Invalid club id' }, 400);
+
+		if (!organizer) {
+			return c.json({ error: 'No organizer found for this domain' }, 404);
+		}
+		const clubId = c.req.param('id');
+		if (!clubId) return c.json({ error: 'Invalid club id' }, 400);
 
 		const clubQuery = await db
 			.select()
@@ -62,6 +70,10 @@ app.get('/clubs/:id', async (c) => {
 app.post('/clubs', async (c) => {
 	try {
 		const organizer = c.get('organizer');
+
+		if (!organizer) {
+			return c.json({ error: 'No organizer found for this domain' }, 404);
+		}
 		const body = await c.req.json();
 
 		const { name, description, imageUrls, videoUrls } = body;
@@ -97,8 +109,12 @@ app.post('/clubs', async (c) => {
 app.put('/clubs/:id', async (c) => {
 	try {
 		const organizer = c.get('organizer');
-		const clubId = Number(c.req.param('id'));
-		if (isNaN(clubId)) return c.json({ error: 'Invalid club id' }, 400);
+
+		if (!organizer) {
+			return c.json({ error: 'No organizer found for this domain' }, 404);
+		}
+		const clubId = c.req.param('id');
+		if (!clubId) return c.json({ error: 'Invalid club id' }, 400);
 
 		const body = await c.req.json();
 
@@ -123,12 +139,7 @@ app.put('/clubs/:id', async (c) => {
 		if (body.videoUrls !== undefined) updateData.videoUrls = body.videoUrls;
 		if (body.isActive !== undefined) updateData.isActive = body.isActive;
 
-		const [updatedClub] = await db
-			.update(clubs)
-			.set(updateData)
-			.where(eq(clubs.id, clubId))
-			.returning()
-			.execute();
+		const [updatedClub] = await db.update(clubs).set(updateData).where(eq(clubs.id, clubId)).returning().execute();
 
 		return c.json({ club: updatedClub, message: 'Club updated successfully' }, 200);
 	} catch (error) {
@@ -141,8 +152,12 @@ app.put('/clubs/:id', async (c) => {
 app.delete('/clubs/:id', async (c) => {
 	try {
 		const organizer = c.get('organizer');
-		const clubId = Number(c.req.param('id'));
-		if (isNaN(clubId)) return c.json({ error: 'Invalid club id' }, 400);
+
+		if (!organizer) {
+			return c.json({ error: 'No organizer found for this domain' }, 404);
+		}
+		const clubId = c.req.param('id');
+		if (!clubId) return c.json({ error: 'Invalid club id' }, 400);
 
 		// Verify club belongs to organizer
 		const clubQuery = await db

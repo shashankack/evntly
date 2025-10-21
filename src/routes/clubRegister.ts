@@ -3,18 +3,19 @@ import { Hono } from 'hono';
 import { db } from '../db/client';
 import { clubs, clubMembers, users } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
-import { organizerAuth } from '../middleware/organizerAuth';
+import { originResolver } from '../middleware/originResolver';
 import { generateSecureRandomId } from '../utils/idGenerator';
 
 const app = new Hono();
 
-app.use('*', organizerAuth);
+// Resolve organizer from Origin/Host header for domain-scoped requests
+app.use('*', originResolver);
 
 // POST /clubs/:id/register - Register a user as a club member
 app.post('/clubs/:id/register', async (c) => {
 	try {
-		const clubId = Number(c.req.param('id'));
-		if (isNaN(clubId)) return c.json({ error: 'Invalid club ID' }, 400);
+		const clubId = c.req.param('id');
+		if (!clubId || typeof clubId !== 'string') return c.json({ error: 'Invalid club ID' }, 400);
 
 		const body = await c.req.json<{
 			firstName: string;
@@ -28,7 +29,7 @@ app.post('/clubs/:id/register', async (c) => {
 		if (!firstName || !lastName || (!email && !phone)) return c.json({ error: 'Missing required user details' }, 400);
 
 		// Get club
-		const [club] = await db.select().from(clubs).where(eq(clubs.id, clubId)).limit(1).execute();
+		const [club] = await db.select().from(clubs).where(eq(clubs.id, String(clubId))).limit(1).execute();
 		if (!club || !club.isActive) return c.json({ error: 'Club not found or inactive' }, 404);
 
 		// Find or create user

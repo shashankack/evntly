@@ -62,8 +62,11 @@ SYSTEM_EMAIL=system@yourdomain.com
 CRON_SECRET=your-cron-secret
 
 # Optional
-PAYMENT_METHOD=manual
 FRONTEND_URL=https://yourdomain.com
+
+# Note: Payment method is automatically determined based on organizer's Razorpay credentials
+# Organizers can set their Razorpay keys in the database to enable payment gateway
+# Free activities (registrationFee = 0) require no payment
 ```
 
 ## 📖 API Endpoints

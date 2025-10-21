@@ -37,13 +37,8 @@ app.post('/activities/:id/register', async (c) => {
 		let organizer = null;
 		if (activity.organizerId) {
 			console.log('🔍 Fetching organizer with ID:', activity.organizerId);
-			[organizer] = await db
-				.select()
-				.from(organizers)
-				.where(eq(organizers.id, activity.organizerId))
-				.limit(1)
-				.execute();
-			
+			[organizer] = await db.select().from(organizers).where(eq(organizers.id, activity.organizerId)).limit(1).execute();
+
 			if (organizer) {
 				console.log('✅ Organizer found:', {
 					id: organizer.id,
@@ -62,10 +57,7 @@ app.post('/activities/:id/register', async (c) => {
 
 		// Determine payment method based on organizer's Razorpay credentials
 		// If both razorpayKeyId and razorpayKeySecret exist, use 'razorpay', otherwise 'manual'
-		const paymentMethod = 
-			organizer?.razorpayKeyId && organizer?.razorpayKeySecret 
-				? 'razorpay' 
-				: 'manual';
+		const paymentMethod = organizer?.razorpayKeyId && organizer?.razorpayKeySecret ? 'razorpay' : 'manual';
 
 		// For recurring activities, check if registration is open
 		// For one-time activities, check status as well
@@ -192,7 +184,7 @@ app.post('/activities/:id/register', async (c) => {
 					organizer.resendApiKey, // Pass organizer's Resend API key
 					organizer.systemEmail // Pass organizer's system email
 				);
-				
+
 				if (emailResult.success) {
 					console.log('✅ Registration confirmation email sent successfully to:', email, 'MessageId:', emailResult.messageId);
 				} else {
@@ -216,7 +208,7 @@ app.post('/activities/:id/register', async (c) => {
 		// ------------------------
 		if (registrationFee === 0) {
 			console.log('🎉 Processing FREE activity registration - completing immediately');
-			
+
 			await db
 				.update(activities)
 				.set({
@@ -241,7 +233,7 @@ app.post('/activities/:id/register', async (c) => {
 		// ------------------------
 		console.log('💳 Processing PAID activity registration - payment information will be provided');
 		console.log('Payment method:', paymentMethod);
-		
+
 		const paymentId = generateSecureRandomId();
 		const [payment] = await db
 			.insert(payments)
@@ -263,10 +255,12 @@ app.post('/activities/:id/register', async (c) => {
 				currency: 'INR',
 			};
 		} else {
+			// Use organizer.domain if available, fallback to env or default
+			const frontendDomain = organizer?.websiteDomain;
 			paymentInfo = {
 				type: 'manual',
-				paymentPage: `${process.env.FRONTEND_URL || 'https://evntly.app'}/pay/${payment.id}`,
-				qrCodeUrl: `${process.env.FRONTEND_URL || 'https://evntly.app'}/qr/${payment.id}`,
+				paymentPage: `${frontendDomain}/pay/${payment.id}`,
+				qrCodeUrl: `${frontendDomain}/qr/${payment.id}`,
 			};
 		}
 

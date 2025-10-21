@@ -3,7 +3,6 @@ import { Hono } from 'hono';
 import { db } from '../db/client';
 import { organizers, users } from '../db/schema';
 import { eq } from 'drizzle-orm';
-import { sendSystemEmail } from '../utils/email';
 import { generateSecureRandomId } from '../utils/idGenerator';
 
 interface Env {
@@ -102,20 +101,8 @@ app.post('/organizers/register', async (c) => {
 			})
 			.returning();
 
-		// Send confirmation email (optional)
-		const confirmationHTML = `
-			<h1>Welcome to Evntly, ${organizationName}!</h1>
-			<p>Your organizer account has been successfully registered.</p>
-			<p><strong>Website Domain:</strong> ${normalizedDomain}</p>
-			<p>Your website will automatically have access to your events and clubs when visitors browse from your domain.</p>
-			<p>No API keys needed - authentication is automatic based on your website domain.</p>
-		`;
-
-		const emailResult = await sendSystemEmail(organizerEmail, 'Welcome to Evntly', confirmationHTML);
-
-		if (!emailResult.success) {
-			console.error('Failed to send email:', emailResult.error);
-		}
+		// Note: Welcome email functionality removed - organizers need to configure Resend API key first
+		// to send emails. They can add their resendApiKey in the organizers table.
 
 		return c.json(
 			{

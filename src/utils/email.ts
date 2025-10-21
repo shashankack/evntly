@@ -2,29 +2,29 @@
 import { Resend } from 'resend';
 import { getRegistrationEmailHTML, getRegistrationEmailSubject, getRegistrationEmailText } from '../templates/registrationEmail';
 
-const resend = new Resend(process.env.RESEND_API_KEY);
-
-// System email for sending auth/token related emails to organizers
-const SYSTEM_EMAIL = process.env.SYSTEM_EMAIL || 'system@evntly.app';
+// Note: Resend API key is fetched from the organizers table in the database
+// No default Resend client is initialized here to avoid deployment errors
 
 export interface EmailOptions {
 	to: string | string[];
 	subject: string;
 	html: string;
 	text?: string;
-	from?: string;
+	from: string;
 	replyTo?: string;
+	resendApiKey: string;
 }
 
 /**
- * Send an email using Resend
- * @param options - Email configuration
+ * Send an email using Resend with the provided API key
+ * @param options - Email configuration including the Resend API key
  * @returns Promise with email send result
  */
 export async function sendEmail(options: EmailOptions): Promise<{ success: boolean; messageId?: string; error?: string }> {
 	try {
+		const resend = new Resend(options.resendApiKey);
 		const { data, error } = await resend.emails.send({
-			from: options.from || SYSTEM_EMAIL,
+			from: options.from,
 			to: Array.isArray(options.to) ? options.to : [options.to],
 			subject: options.subject,
 			html: options.html,
@@ -42,43 +42,6 @@ export async function sendEmail(options: EmailOptions): Promise<{ success: boole
 		console.error('Email service error:', error);
 		return { success: false, error: String(error) };
 	}
-}
-
-/**
- * Send a system email (for token rotation, auth, etc.)
- * Always sent from system email address
- */
-export async function sendSystemEmail(
-	to: string | string[],
-	subject: string,
-	html: string
-): Promise<{ success: boolean; messageId?: string; error?: string }> {
-	return sendEmail({
-		to,
-		subject,
-		html,
-		from: SYSTEM_EMAIL,
-	});
-}
-
-/**
- * Send an organizer email (for user registrations, newsletters, payments, etc.)
- * Sent from organizer's configured email address
- */
-export async function sendOrganizerEmail(
-	organizerEmail: string,
-	to: string | string[],
-	subject: string,
-	html: string,
-	replyTo?: string
-): Promise<{ success: boolean; messageId?: string; error?: string }> {
-	return sendEmail({
-		to,
-		subject,
-		html,
-		from: organizerEmail,
-		replyTo: replyTo || organizerEmail,
-	});
 }
 
 /**
@@ -136,49 +99,42 @@ export async function sendRegistrationEmail(
 
 	const subject = getRegistrationEmailSubject(activityName);
 
-	// Use organizer's Resend API key if available
-	if (organizerResendApiKey) {
-		try {
-			console.log('📧 Using organizer Resend API key to send email');
-			console.log('From email:', organizerSystemEmail || organizerEmail);
-			console.log('To email:', userEmail);
-			console.log('Organization:', organizationName);
-
-			const organizerResend = new Resend(organizerResendApiKey);
-			// Use system email if available, otherwise use organizer email
-			const fromEmail = organizerSystemEmail || organizerEmail;
-
-			const { data, error } = await organizerResend.emails.send({
-				from: `${organizationName} <${fromEmail}>`,
-				to: userEmail,
-				subject,
-				html,
-				text,
-				replyTo: organizerEmail,
-			});
-
-			if (error) {
-				console.error('❌ Email send error with organizer API key:', error);
-				console.error('Error details:', JSON.stringify(error, null, 2));
-				return { success: false, error: error.message };
-			}
-
-			console.log('✅ Email sent successfully! Message ID:', data?.id);
-			return { success: true, messageId: data?.id };
-		} catch (error) {
-			console.error('❌ Email service exception with organizer API key:', error);
-			console.error('Exception details:', error);
-			return { success: false, error: String(error) };
-		}
+	// Resend API key is required - must be fetched from organizers table
+	if (!organizerResendApiKey) {
+		console.error('❌ No Resend API key provided for organizer:', organizationName);
+		return { success: false, error: 'Resend API key not configured for this organizer' };
 	}
 
-	// Fallback: send from system email
-	return sendEmail({
-		to: userEmail,
-		subject,
-		html,
-		text,
-		from: `${organizationName} <${SYSTEM_EMAIL}>`,
-		replyTo: organizerEmail,
-	});
+	try {
+		console.log('📧 Using organizer Resend API key to send email');
+		console.log('From email:', organizerSystemEmail || organizerEmail);
+		console.log('To email:', userEmail);
+		console.log('Organization:', organizationName);
+
+		const organizerResend = new Resend(organizerResendApiKey);
+		// Use system email if available, otherwise use organizer email
+		const fromEmail = organizerSystemEmail || organizerEmail;
+
+		const { data, error } = await organizerResend.emails.send({
+			from: `${organizationName} <${fromEmail}>`,
+			to: userEmail,
+			subject,
+			html,
+			text,
+			replyTo: organizerEmail,
+		});
+
+		if (error) {
+			console.error('❌ Email send error with organizer API key:', error);
+			console.error('Error details:', JSON.stringify(error, null, 2));
+			return { success: false, error: error.message };
+		}
+
+		console.log('✅ Email sent successfully! Message ID:', data?.id);
+		return { success: true, messageId: data?.id };
+	} catch (error) {
+		console.error('❌ Email service exception with organizer API key:', error);
+		console.error('Exception details:', error);
+		return { success: false, error: String(error) };
+	}
 }

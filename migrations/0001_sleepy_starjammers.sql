@@ -1,1 +1,0 @@
-ALTER TABLE "activity_registrations" ADD COLUMN "ticket_count" integer DEFAULT 1 NOT NULL;

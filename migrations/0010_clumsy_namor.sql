@@ -1,1 +1,0 @@
-ALTER TABLE "organizers" ADD COLUMN "website_domain" varchar(255);

@@ -7,12 +7,7 @@ declare namespace Cloudflare {
 	}
 	interface Env {
 		ALLOWED_ORIGINS: string;
-		FRONTEND_URL: string;
 		DATABASE_URL: string;
-		JWT_SECRET: string;
-		CRON_SECRET: string;
-		RESEND_API_KEY: string;
-		SYSTEM_EMAIL: string;
 	}
 }
 interface Env extends Cloudflare.Env {}
@@ -20,13 +15,7 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-	interface ProcessEnv
-		extends StringifyValues<
-			Pick<
-				Cloudflare.Env,
-				'ALLOWED_ORIGINS' | 'FRONTEND_URL' | 'DATABASE_URL' | 'JWT_SECRET' | 'CRON_SECRET' | 'RESEND_API_KEY' | 'SYSTEM_EMAIL'
-			>
-		> {}
+	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, 'ALLOWED_ORIGINS' | 'DATABASE_URL'>> {}
 }
 
 // Begin runtime types

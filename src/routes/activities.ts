@@ -1,18 +1,68 @@
 // src/routes/activities.ts
 import { Hono } from 'hono';
 import { db } from '../db/client';
-import { organizers, clubs, activities } from '../db/schema';
-import { eq, and, inArray, asc, desc } from 'drizzle-orm';
+import { organizers, clubs, activities, activitySchedules } from '../db/schema';
+import { eq, and, inArray, asc, desc, sql, gte, lte } from 'drizzle-orm';
 import { organizerAuth } from '../middleware/organizerAuth';
+import { generateSecureRandomId } from '../utils/idGenerator';
 
-const app = new Hono();
+interface Env {
+	Variables: {
+		organizer: any; // Adjust type as needed based on organizerAuth middleware
+	};
+}
+
+const app = new Hono<Env>();
 
 app.use('*', organizerAuth);
+
+// Helper function to calculate current status for recurring activities
+function getRecurringActivityStatus(schedules: any[]): 'upcoming' | 'live' | 'completed' {
+	const now = new Date();
+	const currentDay = now.toLocaleDateString('en-US', { weekday: 'long' });
+	const currentTime = now;
+
+	// Find today's schedule
+	const todaySchedule = schedules.find((s) => s.dayOfWeek === currentDay);
+
+	if (todaySchedule) {
+		const startTime = new Date(todaySchedule.startTime);
+		const endTime = new Date(todaySchedule.endTime);
+
+		// Check if we're currently in the live time slot
+		if (currentTime >= startTime && currentTime <= endTime) {
+			return 'live';
+		}
+
+		// If current time is before start time, it's upcoming
+		if (currentTime < startTime) {
+			return 'upcoming';
+		}
+	}
+
+	// Check if there's any upcoming schedule this week
+	const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+	const currentDayIndex = now.getDay();
+
+	for (let i = 1; i < 7; i++) {
+		const checkDayIndex = (currentDayIndex + i) % 7;
+		const checkDay = daysOfWeek[checkDayIndex];
+		const upcomingSchedule = schedules.find((s) => s.dayOfWeek === checkDay);
+
+		if (upcomingSchedule) {
+			return 'upcoming';
+		}
+	}
+
+	// If no upcoming schedules found, show as completed (but will repeat next week)
+	return 'completed';
+}
 
 // -----------------------------
 // GET /activities
 // List all activities for the organizer
 // Supports query filters, pagination, and sorting
+// For recurring activities, dynamically calculate status
 // -----------------------------
 app.get('/activities', async (c) => {
 	try {
@@ -37,7 +87,10 @@ app.get('/activities', async (c) => {
 		const validStatuses = ['active', 'canceled', 'completed', 'upcoming', 'live'] as const;
 		if (status && validStatuses.includes(status as (typeof validStatuses)[number]))
 			conditions.push(eq(activities.status, status as (typeof validStatuses)[number]));
-		if (type) conditions.push(eq(activities.type, type));
+		
+		const validTypes = ['one-time', 'recurring'] as const;
+		if (type && validTypes.includes(type as (typeof validTypes)[number]))
+			conditions.push(eq(activities.type, type as (typeof validTypes)[number]));
 
 		// Pagination
 		const pageNum = Math.max(Number(page), 1);
@@ -60,7 +113,29 @@ app.get('/activities', async (c) => {
 			.offset(offset)
 			.execute();
 
-		return c.json({ activities: activitiesList }, 200);
+		// For recurring activities, fetch schedules and calculate dynamic status
+		const enrichedActivities = await Promise.all(
+			activitiesList.map(async (activity) => {
+				if (activity.type === 'recurring') {
+					const schedules = await db
+						.select()
+						.from(activitySchedules)
+						.where(eq(activitySchedules.activityId, activity.id))
+						.execute();
+
+					const dynamicStatus = getRecurringActivityStatus(schedules);
+
+					return {
+						...activity,
+						schedules,
+						currentStatus: dynamicStatus, // Dynamic status based on schedule
+					};
+				}
+				return activity;
+			})
+		);
+
+		return c.json({ activities: enrichedActivities }, 200);
 	} catch (error) {
 		console.error('Error fetching activities:', error);
 		return c.json({ error: 'Internal Server Error' }, 500);
@@ -70,6 +145,7 @@ app.get('/activities', async (c) => {
 // -----------------------------
 // GET /activities/:id
 // Get detailed info of a single activity
+// For recurring activities, include schedules and dynamic status
 // -----------------------------
 app.get('/activities/:id', async (c) => {
 	try {
@@ -90,9 +166,330 @@ app.get('/activities/:id', async (c) => {
 		const activity = activityQuery[0];
 		if (!activity) return c.json({ error: 'Activity not found' }, 404);
 
-		return c.json({ activity }, 200);
+		// For recurring activities, fetch schedules and calculate status
+		if (activity.activities.type === 'recurring') {
+			const schedules = await db
+				.select()
+				.from(activitySchedules)
+				.where(eq(activitySchedules.activityId, activityId))
+				.execute();
+
+			const dynamicStatus = getRecurringActivityStatus(schedules);
+
+			return c.json({
+				activity: {
+					...activity.activities,
+					club: activity.clubs,
+					schedules,
+					currentStatus: dynamicStatus,
+				},
+			}, 200);
+		}
+
+		return c.json({
+			activity: {
+				...activity.activities,
+				club: activity.clubs,
+			},
+		}, 200);
 	} catch (error) {
 		console.error('Error fetching activity:', error);
+		return c.json({ error: 'Internal Server Error' }, 500);
+	}
+});
+
+// -----------------------------
+// POST /activities
+// Create a new activity
+// For one-time: requires startDateTime and endDateTime
+// For recurring: requires schedules array
+// -----------------------------
+app.post('/activities', async (c) => {
+	try {
+		const organizer = c.get('organizer');
+		const body = await c.req.json();
+
+		const {
+			clubId,
+			name,
+			slug,
+			description,
+			additionalInfo,
+			venueName,
+			mapUrl,
+			imageUrls,
+			videoUrls,
+			type = 'one-time',
+			startDateTime,
+			endDateTime,
+			schedules, // For recurring activities: [{ dayOfWeek, startTime, endTime }]
+			availableSlots,
+			registrationFee = 0,
+			isRegistrationOpen = true,
+		} = body;
+
+		// Validation
+		if (!clubId || !name || !slug) {
+			return c.json({ error: 'Missing required fields: clubId, name, slug' }, 400);
+		}
+
+		// Verify club belongs to organizer
+		const [club] = await db
+			.select()
+			.from(clubs)
+			.where(and(eq(clubs.id, clubId), eq(clubs.organizerId, organizer.id)))
+			.limit(1)
+			.execute();
+
+		if (!club) return c.json({ error: 'Club not found' }, 404);
+
+		// Type-specific validation
+		if (type === 'one-time') {
+			if (!startDateTime || !endDateTime) {
+				return c.json({ error: 'one-time activities require startDateTime and endDateTime' }, 400);
+			}
+		} else if (type === 'recurring') {
+			if (!schedules || !Array.isArray(schedules) || schedules.length === 0) {
+				return c.json({ error: 'recurring activities require schedules array' }, 400);
+			}
+		}
+
+		// Generate unique ID
+		const activityId = generateSecureRandomId();
+
+		// Determine initial status
+		let initialStatus: 'upcoming' | 'live' | 'active' = 'upcoming';
+		if (type === 'one-time') {
+			const now = new Date();
+			const start = new Date(startDateTime);
+			const end = new Date(endDateTime);
+
+			if (now >= start && now <= end) {
+				initialStatus = 'live';
+			} else if (now > end) {
+				initialStatus = 'active'; // Set as active, but organizer might want to mark completed
+			}
+		}
+
+		// Insert activity
+		const [newActivity] = await db
+			.insert(activities)
+			.values({
+				id: activityId,
+				clubId,
+				name,
+				slug,
+				description: description || null,
+				additionalInfo: additionalInfo || {},
+				venueName: venueName || null,
+				mapUrl: mapUrl || null,
+				imageUrls: imageUrls || [],
+				videoUrls: videoUrls || [],
+				type,
+				startDateTime: type === 'one-time' ? new Date(startDateTime) : null,
+				endDateTime: type === 'one-time' ? new Date(endDateTime) : null,
+				availableSlots: availableSlots || 0,
+				bookedSlots: 0,
+				registrationFee,
+				isRegistrationOpen,
+				status: initialStatus,
+				isActive: true,
+			})
+			.returning()
+			.execute();
+
+		// For recurring activities, insert schedules
+		if (type === 'recurring' && schedules && schedules.length > 0) {
+			const scheduleValues = schedules.map((schedule: any) => ({
+				id: generateSecureRandomId(),
+				activityId,
+				dayOfWeek: schedule.dayOfWeek,
+				startTime: new Date(schedule.startTime),
+				endTime: new Date(schedule.endTime),
+			}));
+
+			await db.insert(activitySchedules).values(scheduleValues).execute();
+		}
+
+		return c.json({ activity: newActivity, message: 'Activity created successfully' }, 201);
+	} catch (error) {
+		console.error('Error creating activity:', error);
+		return c.json({ error: 'Internal Server Error' }, 500);
+	}
+});
+
+// -----------------------------
+// PUT /activities/:id
+// Update an existing activity
+// -----------------------------
+app.put('/activities/:id', async (c) => {
+	try {
+		const organizer = c.get('organizer');
+		const activityId = Number(c.req.param('id'));
+		if (isNaN(activityId)) return c.json({ error: 'Invalid activity id' }, 400);
+
+		const body = await c.req.json();
+
+		// Verify activity belongs to organizer
+		const activityQuery = await db
+			.select()
+			.from(activities)
+			.innerJoin(clubs, eq(clubs.id, activities.clubId))
+			.where(and(eq(activities.id, activityId), eq(clubs.organizerId, organizer.id)))
+			.limit(1)
+			.execute();
+
+		if (!activityQuery[0]) return c.json({ error: 'Activity not found' }, 404);
+
+		const existingActivity = activityQuery[0].activities;
+
+		// Build update object
+		const updateData: any = {
+			updatedAt: new Date(),
+		};
+
+		// Allow updating specific fields
+		if (body.name !== undefined) updateData.name = body.name;
+		if (body.slug !== undefined) updateData.slug = body.slug;
+		if (body.description !== undefined) updateData.description = body.description;
+		if (body.additionalInfo !== undefined) updateData.additionalInfo = body.additionalInfo;
+		if (body.venueName !== undefined) updateData.venueName = body.venueName;
+		if (body.mapUrl !== undefined) updateData.mapUrl = body.mapUrl;
+		if (body.imageUrls !== undefined) updateData.imageUrls = body.imageUrls;
+		if (body.videoUrls !== undefined) updateData.videoUrls = body.videoUrls;
+		if (body.availableSlots !== undefined) updateData.availableSlots = body.availableSlots;
+		if (body.registrationFee !== undefined) updateData.registrationFee = body.registrationFee;
+		if (body.isRegistrationOpen !== undefined) updateData.isRegistrationOpen = body.isRegistrationOpen;
+		if (body.status !== undefined) updateData.status = body.status;
+		if (body.isActive !== undefined) updateData.isActive = body.isActive;
+
+		// Handle type-specific fields
+		if (existingActivity.type === 'one-time') {
+			if (body.startDateTime !== undefined) updateData.startDateTime = new Date(body.startDateTime);
+			if (body.endDateTime !== undefined) updateData.endDateTime = new Date(body.endDateTime);
+		}
+
+		// Update activity
+		const [updatedActivity] = await db
+			.update(activities)
+			.set(updateData)
+			.where(eq(activities.id, activityId))
+			.returning()
+			.execute();
+
+		// Handle schedule updates for recurring activities
+		if (existingActivity.type === 'recurring' && body.schedules) {
+			// Delete existing schedules
+			await db.delete(activitySchedules).where(eq(activitySchedules.activityId, activityId)).execute();
+
+			// Insert new schedules
+			if (body.schedules.length > 0) {
+				const scheduleValues = body.schedules.map((schedule: any) => ({
+					id: generateSecureRandomId(),
+					activityId,
+					dayOfWeek: schedule.dayOfWeek,
+					startTime: new Date(schedule.startTime),
+					endTime: new Date(schedule.endTime),
+				}));
+
+				await db.insert(activitySchedules).values(scheduleValues).execute();
+			}
+		}
+
+		return c.json({ activity: updatedActivity, message: 'Activity updated successfully' }, 200);
+	} catch (error) {
+		console.error('Error updating activity:', error);
+		return c.json({ error: 'Internal Server Error' }, 500);
+	}
+});
+
+// -----------------------------
+// DELETE /activities/:id
+// Soft delete an activity
+// -----------------------------
+app.delete('/activities/:id', async (c) => {
+	try {
+		const organizer = c.get('organizer');
+		const activityId = Number(c.req.param('id'));
+		if (isNaN(activityId)) return c.json({ error: 'Invalid activity id' }, 400);
+
+		// Verify activity belongs to organizer
+		const activityQuery = await db
+			.select()
+			.from(activities)
+			.innerJoin(clubs, eq(clubs.id, activities.clubId))
+			.where(and(eq(activities.id, activityId), eq(clubs.organizerId, organizer.id)))
+			.limit(1)
+			.execute();
+
+		if (!activityQuery[0]) return c.json({ error: 'Activity not found' }, 404);
+
+		// Soft delete
+		await db
+			.update(activities)
+			.set({
+				isActive: false,
+				deletedAt: new Date(),
+			})
+			.where(eq(activities.id, activityId))
+			.execute();
+
+		return c.json({ message: 'Activity deleted successfully' }, 200);
+	} catch (error) {
+		console.error('Error deleting activity:', error);
+		return c.json({ error: 'Internal Server Error' }, 500);
+	}
+});
+
+// -----------------------------
+// PATCH /activities/:id/status
+// Update activity status manually (for one-time activities)
+// For recurring, status is calculated dynamically
+// -----------------------------
+app.patch('/activities/:id/status', async (c) => {
+	try {
+		const organizer = c.get('organizer');
+		const activityId = Number(c.req.param('id'));
+		if (isNaN(activityId)) return c.json({ error: 'Invalid activity id' }, 400);
+
+		const { status } = await c.req.json();
+		const validStatuses = ['active', 'canceled', 'completed', 'upcoming', 'live'] as const;
+
+		if (!status || !validStatuses.includes(status as any)) {
+			return c.json({ error: 'Invalid status' }, 400);
+		}
+
+		// Verify activity belongs to organizer
+		const activityQuery = await db
+			.select()
+			.from(activities)
+			.innerJoin(clubs, eq(clubs.id, activities.clubId))
+			.where(and(eq(activities.id, activityId), eq(clubs.organizerId, organizer.id)))
+			.limit(1)
+			.execute();
+
+		if (!activityQuery[0]) return c.json({ error: 'Activity not found' }, 404);
+
+		const activity = activityQuery[0].activities;
+
+		// Only allow status updates for one-time activities
+		if (activity.type === 'recurring') {
+			return c.json({ 
+				error: 'Cannot manually update status for recurring activities. Status is calculated dynamically based on schedules.',
+			}, 400);
+		}
+
+		// Update status
+		const [updatedActivity] = await db
+			.update(activities)
+			.set({ status, updatedAt: new Date() })
+			.where(eq(activities.id, activityId))
+			.returning()
+			.execute();
+
+		return c.json({ activity: updatedActivity, message: 'Status updated successfully' }, 200);
+	} catch (error) {
+		console.error('Error updating status:', error);
 		return c.json({ error: 'Internal Server Error' }, 500);
 	}
 });

@@ -171,3 +171,5 @@ package-lock.json
 .vscode/
 test-results/
 .prettierrc
+
+docs/

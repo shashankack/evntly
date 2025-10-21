@@ -3,10 +3,16 @@
 	"name": "evntly",
 	"main": "src/index.ts",
 	"compatibility_date": "2025-10-20",
+	"compatibility_flags": ["nodejs_compat"],
 
 	// Dev mode settings
 	"dev": {
 		"port": 8787,
 		"local_protocol": "http"
+	},
+
+	// Cron triggers for scheduled tasks
+	"triggers": {
+		"crons": ["0 0 * * *"] // Run daily at midnight UTC to auto-rotate keys
 	}
 }

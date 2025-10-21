@@ -8,6 +8,41 @@
       "when": 1760982202058,
       "tag": "0000_early_wrecker",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1761016495007,
+      "tag": "0001_sleepy_starjammers",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1761018311897,
+      "tag": "0002_fast_grandmaster",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1761024298148,
+      "tag": "0003_good_karen_page",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1761025072048,
+      "tag": "0004_damp_morlun",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1761025841137,
+      "tag": "0005_watery_glorian",
+      "breakpoints": true
     }
   ]
 }

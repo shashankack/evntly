@@ -1,0 +1,22 @@
+# Environment Variables for Evntly
+
+# Database
+DATABASE_URL=your_neon_database_url_here
+
+# JWT Configuration
+JWT_SECRET=your-super-secret-jwt-key-change-in-production-use-long-random-string
+
+# Email Configuration (Resend)
+RESEND_API_KEY=re_your_resend_api_key_here
+SYSTEM_EMAIL=system@evntly.app
+
+# Cron Job Protection
+CRON_SECRET=your-cron-secret-for-auto-rotation
+
+# Payment Configuration
+PAYMENT_METHOD=manual
+FRONTEND_URL=https://evntly.app
+
+# Optional: For Razorpay integration
+# RAZORPAY_KEY_ID=your_razorpay_key
+# RAZORPAY_KEY_SECRET=your_razorpay_secret

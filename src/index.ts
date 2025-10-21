@@ -8,15 +8,37 @@ import organizersRouter from './routes/organizers';
 
 const app = new Hono();
 
-// Enable CORS
-app.use('*', cors());
+// Configure CORS
+app.use(
+	'*',
+	cors({
+		origin: (origin) => {
+			const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000').split(',').map((o) => o.trim());
+
+			// Allow requests with no origin (mobile apps, Postman, etc.)
+			if (!origin) return '*';
+
+			// Check if origin is in allowed list
+			if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+				return origin;
+			}
+
+			return allowedOrigins[0]; // Default to first allowed origin
+		},
+		allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+		allowHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+		exposeHeaders: ['Content-Length', 'X-Request-Id'],
+		maxAge: 86400, // 24 hours
+		credentials: true,
+	})
+);
 
 // Health check
 app.get('/', (c) => {
-	return c.json({ 
+	return c.json({
 		message: 'Evntly API is running!',
 		version: '1.0.0',
-		timestamp: new Date().toISOString()
+		timestamp: new Date().toISOString(),
 	});
 });
 
@@ -42,11 +64,11 @@ export default {
 	async fetch(request: Request, env: any, ctx: any): Promise<Response> {
 		return app.fetch(request, env, ctx);
 	},
-	
+
 	// Scheduled handler for cron jobs (auto-rotate keys)
 	async scheduled(event: any, env: any, ctx: any): Promise<void> {
 		console.log('Running scheduled task: auto-rotate keys');
-		
+
 		try {
 			// Call the auto-rotate endpoint
 			const response = await app.request('/organizers/auto-rotate', {
@@ -55,7 +77,7 @@ export default {
 					'x-cron-secret': env.CRON_SECRET || process.env.CRON_SECRET || 'default-secret',
 				},
 			});
-			
+
 			const result = await response.json();
 			console.log('Auto-rotation result:', result);
 		} catch (error) {

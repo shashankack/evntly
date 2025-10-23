@@ -38,7 +38,6 @@ app.get('/', (c) => {
 	return c.json({
 		message: 'Evntly API is running! 🎉',
 		version: '2.0.0',
-		authentication: 'Domain-based (no secret keys needed)',
 		timestamp: new Date().toISOString(),
 	});
 });

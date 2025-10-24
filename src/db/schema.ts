@@ -45,6 +45,7 @@ export const clubs = pgTable('clubs', {
 	id: uuid('id').defaultRandom().primaryKey(),
 	organizerId: uuid('organizer_id').references(() => organizers.id),
 	name: varchar('name', { length: 255 }).notNull(),
+	slug: varchar('slug', { length: 255 }).notNull().unique(),
 	description: text('description'),
 	imageUrls: jsonb('image_urls').default('[]'),
 	videoUrls: jsonb('video_urls').default('[]'),

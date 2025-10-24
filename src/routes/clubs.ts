@@ -38,21 +38,21 @@ app.get('/clubs', async (c) => {
 	}
 });
 
-// GET /clubs/:id - detailed view of a single club
-app.get('/clubs/:id', async (c) => {
+// GET /clubs/:slug - detailed view of a single club
+app.get('/clubs/:slug', async (c) => {
 	try {
 		const organizer = c.get('organizer');
 
 		if (!organizer) {
 			return c.json({ error: 'No organizer found for this domain' }, 404);
 		}
-		const clubId = c.req.param('id');
-		if (!clubId) return c.json({ error: 'Invalid club id' }, 400);
+		const clubSlug = c.req.param('slug');
+		if (!clubSlug) return c.json({ error: 'Invalid club slug' }, 400);
 
 		const clubQuery = await db
 			.select()
 			.from(clubs)
-			.where(and(eq(clubs.id, clubId), eq(clubs.organizerId, organizer.id), eq(clubs.isActive, true)))
+			.where(and(eq(clubs.slug, clubSlug), eq(clubs.organizerId, organizer.id), eq(clubs.isActive, true)))
 			.limit(1)
 			.execute();
 
@@ -76,10 +76,10 @@ app.post('/clubs', async (c) => {
 		}
 		const body = await c.req.json();
 
-		const { name, description, imageUrls, videoUrls } = body;
+		const { name, slug, description, imageUrls, videoUrls } = body;
 
-		if (!name) {
-			return c.json({ error: 'Missing required field: name' }, 400);
+		if (!name || !slug) {
+			return c.json({ error: 'Missing required field: name or slug' }, 400);
 		}
 
 		const clubId = generateSecureRandomId();
@@ -90,6 +90,7 @@ app.post('/clubs', async (c) => {
 				id: clubId,
 				organizerId: organizer.id,
 				name,
+				slug,
 				description: description || null,
 				imageUrls: imageUrls || [],
 				videoUrls: videoUrls || [],
@@ -105,16 +106,16 @@ app.post('/clubs', async (c) => {
 	}
 });
 
-// PUT /clubs/:id - update an existing club
-app.put('/clubs/:id', async (c) => {
+// PUT /clubs/:slug - update an existing club
+app.put('/clubs/:slug', async (c) => {
 	try {
 		const organizer = c.get('organizer');
 
 		if (!organizer) {
 			return c.json({ error: 'No organizer found for this domain' }, 404);
 		}
-		const clubId = c.req.param('id');
-		if (!clubId) return c.json({ error: 'Invalid club id' }, 400);
+		const clubSlug = c.req.param('slug');
+		if (!clubSlug) return c.json({ error: 'Invalid club slug' }, 400);
 
 		const body = await c.req.json();
 
@@ -122,7 +123,7 @@ app.put('/clubs/:id', async (c) => {
 		const clubQuery = await db
 			.select()
 			.from(clubs)
-			.where(and(eq(clubs.id, clubId), eq(clubs.organizerId, organizer.id)))
+			.where(and(eq(clubs.slug, clubSlug), eq(clubs.organizerId, organizer.id)))
 			.limit(1)
 			.execute();
 
@@ -134,12 +135,13 @@ app.put('/clubs/:id', async (c) => {
 		};
 
 		if (body.name !== undefined) updateData.name = body.name;
+		if (body.slug !== undefined) updateData.slug = body.slug;
 		if (body.description !== undefined) updateData.description = body.description;
 		if (body.imageUrls !== undefined) updateData.imageUrls = body.imageUrls;
 		if (body.videoUrls !== undefined) updateData.videoUrls = body.videoUrls;
 		if (body.isActive !== undefined) updateData.isActive = body.isActive;
 
-		const [updatedClub] = await db.update(clubs).set(updateData).where(eq(clubs.id, clubId)).returning().execute();
+		const [updatedClub] = await db.update(clubs).set(updateData).where(and(eq(clubs.slug, clubSlug), eq(clubs.organizerId, organizer.id))).returning().execute();
 
 		return c.json({ club: updatedClub, message: 'Club updated successfully' }, 200);
 	} catch (error) {

@@ -54,14 +54,13 @@ app.notFound((c) => {
 	return c.json({ error: 'Not Found' }, 404);
 });
 
+
 // Error handler
 app.onError((err, c) => {
 	console.error('Unhandled error:', err);
 	return c.json({ error: 'Internal Server Error' }, 500);
 });
 
-export default {
-	async fetch(request: Request, env: any, ctx: any): Promise<Response> {
-		return app.fetch(request, env, ctx);
-	},
-} satisfies ExportedHandler<Env>;
+export default app;
+
+// (Removed duplicate default export; app is now exported for worker.ts)

@@ -1,13 +1,26 @@
 {
 	// Basic Worker config
 	"name": "evntly",
-	"main": "src/index.ts",
+	"main": "src/worker.ts",
 	"compatibility_date": "2025-10-20",
 	"compatibility_flags": ["nodejs_compat"],
+	"triggers": {
+		"crons": ["*/10 * * * *"]
+	},
 
 	// Dev mode settings
 	"dev": {
 		"port": 8787,
 		"local_protocol": "http"
+	},
+
+	"observability": {
+		"enabled": false,
+		"head_sampling_rate": 1,
+		"logs": {
+			"enabled": true,
+			"head_sampling_rate": 1,
+			"invocation_logs": true
+		}
 	}
 }

@@ -91,11 +91,25 @@ GET  /activities                 List activities
 GET  /activities/:id             Get activity details
 ```
 
+
 ### Cron Endpoints (requires `x-cron-secret` header)
 
 ```
-GET  /organizers/auto-rotate     Auto-rotate expired keys
+GET  /organizers/auto-rotate         Auto-rotate expired keys
+GET  /cron/update-activity-status    Update one-time activity statuses (upcoming/live/completed)
 ```
+
+#### Activity Status Update Cron
+
+To keep one-time activity statuses accurate, call this endpoint periodically (e.g., every 5 minutes) from your scheduler:
+
+```
+GET /cron/update-activity-status
+Headers:
+  x-cron-secret: <your-cron-secret>
+```
+
+This will automatically set activities to "live" or "completed" based on their start and end times.
 
 ## 🏗️ Architecture
 

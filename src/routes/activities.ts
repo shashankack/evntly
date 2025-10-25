@@ -27,8 +27,11 @@ function getRecurringActivityStatus(schedules: any[]): 'upcoming' | 'live' | 'co
 	const todaySchedule = schedules.find((s) => s.dayOfWeek === currentDay);
 
 	if (todaySchedule) {
-		const startTime = new Date(todaySchedule.startTime);
-		const endTime = new Date(todaySchedule.endTime);
+		// Create start and end times for today using the stored times
+		const startTime = new Date(now);
+		startTime.setHours(todaySchedule.startTime.getHours(), todaySchedule.startTime.getMinutes(), todaySchedule.startTime.getSeconds() || 0, 0);
+		const endTime = new Date(now);
+		endTime.setHours(todaySchedule.endTime.getHours(), todaySchedule.endTime.getMinutes(), todaySchedule.endTime.getSeconds() || 0, 0);
 
 		// Check if we're currently in the live time slot
 		if (currentTime >= startTime && currentTime <= endTime) {
@@ -44,9 +47,10 @@ function getRecurringActivityStatus(schedules: any[]): 'upcoming' | 'live' | 'co
 	// Check if there's any upcoming schedule this week
 	const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 	const currentDayIndex = now.getDay();
+	const daysLeft = 6 - currentDayIndex;
 
-	for (let i = 1; i < 7; i++) {
-		const checkDayIndex = (currentDayIndex + i) % 7;
+	for (let i = 1; i <= daysLeft; i++) {
+		const checkDayIndex = currentDayIndex + i;
 		const checkDay = daysOfWeek[checkDayIndex];
 		const upcomingSchedule = schedules.find((s) => s.dayOfWeek === checkDay);
 
@@ -55,7 +59,7 @@ function getRecurringActivityStatus(schedules: any[]): 'upcoming' | 'live' | 'co
 		}
 	}
 
-	// If no upcoming schedules found, show as completed (but will repeat next week)
+	// If no upcoming schedules found this week, show as completed
 	return 'completed';
 }
 
@@ -65,45 +69,33 @@ function getRecurringActivityStatus(schedules: any[]): 'upcoming' | 'live' | 'co
 // Supports query filters, pagination, and sorting
 // For recurring activities, dynamically calculate status
 // -----------------------------
+
 app.get('/activities', async (c) => {
 	try {
 		const organizer = c.get('organizer');
-
 		if (!organizer) {
 			return c.json({ error: 'No organizer found for this domain' }, 404);
 		}
-
 		// Extract query parameters
 		const { status, type, clubId, page = '1', limit = '10', sortBy = 'createdAt', order = 'desc' } = c.req.query();
-
-		// Dynamic filter conditions - activities belong to this organizer directly OR through a club
 		const conditions = [eq(activities.organizerId, organizer.id), eq(activities.isActive, true)];
-
-		// If specific clubId requested, filter by it
 		if (clubId) {
 			conditions.push(eq(activities.clubId, clubId));
 		}
-
 		const validStatuses = ['upcoming', 'live', 'completed', 'canceled'] as const;
 		if (status && validStatuses.includes(status as (typeof validStatuses)[number]))
 			conditions.push(eq(activities.status, status as (typeof validStatuses)[number]));
-
 		const validTypes = ['one-time', 'recurring'] as const;
 		if (type && validTypes.includes(type as (typeof validTypes)[number]))
 			conditions.push(eq(activities.type, type as (typeof validTypes)[number]));
-
-		// Pagination
 		const pageNum = Math.max(Number(page), 1);
-		const limitNum = Math.min(Number(limit), 100); // max 100 per page
+		const limitNum = Math.min(Number(limit), 100);
 		const offset = (pageNum - 1) * limitNum;
-
-		// Sorting
 		const sortMap: Record<string, any> = {
 			createdAt: activities.createdAt,
 		};
-		const sortColumn = sortMap[sortBy] || activities.createdAt; // fallback to createdAt
+		const sortColumn = sortMap[sortBy] || activities.createdAt;
 		const sortOrder = order.toLowerCase() === 'asc' ? asc(sortColumn) : desc(sortColumn);
-
 		const activitiesList = await db
 			.select()
 			.from(activities)
@@ -112,25 +104,38 @@ app.get('/activities', async (c) => {
 			.limit(limitNum)
 			.offset(offset)
 			.execute();
-
 		// For recurring activities, fetch schedules and calculate dynamic status
 		const enrichedActivities = await Promise.all(
 			activitiesList.map(async (activity) => {
 				if (activity.type === 'recurring') {
 					const schedules = await db.select().from(activitySchedules).where(eq(activitySchedules.activityId, activity.id)).execute();
-
 					const dynamicStatus = getRecurringActivityStatus(schedules);
-
 					return {
 						...activity,
 						schedules,
-						currentStatus: dynamicStatus, // Dynamic status based on schedule
+						currentStatus: dynamicStatus,
+					};
+				} else if (activity.type === 'one-time') {
+					// Dynamically calculate status for one-time activities
+					const now = new Date();
+					let dynamicStatus: 'upcoming' | 'live' | 'completed' = 'upcoming';
+					if (activity.startDateTime && activity.endDateTime) {
+						const start = new Date(activity.startDateTime);
+						const end = new Date(activity.endDateTime);
+						if (now >= start && now <= end) {
+							dynamicStatus = 'live';
+						} else if (now > end) {
+							dynamicStatus = 'completed';
+						}
+					}
+					return {
+						...activity,
+						currentStatus: dynamicStatus,
 					};
 				}
 				return activity;
 			})
 		);
-
 		return c.json({ activities: enrichedActivities }, 200);
 	} catch (error) {
 		console.error('Error fetching activities:', error);
@@ -143,13 +148,12 @@ app.get('/activities', async (c) => {
 // Get detailed info of a single activity
 // For recurring activities, include schedules and dynamic status
 // -----------------------------
+
 app.get('/activities/:id', async (c) => {
 	try {
 		const organizer = c.get('organizer');
-
 		const activityId = Number(c.req.param('id'));
 		if (isNaN(activityId)) return c.json({ error: 'Invalid activity id' }, 400);
-
 		// Ensure the activity belongs to this organizer
 		const activityQuery = await db
 			.select()
@@ -158,42 +162,50 @@ app.get('/activities/:id', async (c) => {
 			.where(and(eq(activities.id, String(activityId)), eq(clubs.organizerId, organizer.id)))
 			.limit(1)
 			.execute();
-
 		const activity = activityQuery[0];
 		if (!activity) return c.json({ error: 'Activity not found' }, 404);
-
-		// For recurring activities, fetch schedules and calculate status
 		if (activity.activities.type === 'recurring') {
 			const schedules = await db
 				.select()
 				.from(activitySchedules)
 				.where(eq(activitySchedules.activityId, String(activityId)))
 				.execute();
-
 			const dynamicStatus = getRecurringActivityStatus(schedules);
-
-			return c.json(
-				{
-					activity: {
-						...activity.activities,
-						club: activity.clubs,
-						schedules,
-						currentStatus: dynamicStatus,
-					},
-				},
-				200
-			);
-		}
-
-		return c.json(
-			{
+			return c.json({
 				activity: {
 					...activity.activities,
 					club: activity.clubs,
+					schedules,
+					currentStatus: dynamicStatus,
 				},
+			}, 200);
+		} else if (activity.activities.type === 'one-time') {
+			// Dynamically calculate status for one-time activities
+			const now = new Date();
+			let dynamicStatus: 'upcoming' | 'live' | 'completed' = 'upcoming';
+			if (activity.activities.startDateTime && activity.activities.endDateTime) {
+				const start = new Date(activity.activities.startDateTime);
+				const end = new Date(activity.activities.endDateTime);
+				if (now >= start && now <= end) {
+					dynamicStatus = 'live';
+				} else if (now > end) {
+					dynamicStatus = 'completed';
+				}
+			}
+			return c.json({
+				activity: {
+					...activity.activities,
+					club: activity.clubs,
+					currentStatus: dynamicStatus,
+				},
+			}, 200);
+		}
+		return c.json({
+			activity: {
+				...activity.activities,
+				club: activity.clubs,
 			},
-			200
-		);
+		}, 200);
 	} catch (error) {
 		console.error('Error fetching activity:', error);
 		return c.json({ error: 'Internal Server Error' }, 500);

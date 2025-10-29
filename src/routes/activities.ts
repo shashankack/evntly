@@ -1,3 +1,9 @@
+// Helper to omit club id and organizerId
+function omitClubIds(club: Record<string, any>) {
+	if (!club) return club;
+	const { id, organizerId, ...rest } = club;
+	return rest;
+}
 // src/routes/activities.ts
 import { Hono } from 'hono';
 import { db } from '../db/client';
@@ -29,7 +35,12 @@ function getRecurringActivityStatus(schedules: any[]): 'upcoming' | 'live' | 'co
 	if (todaySchedule) {
 		// Create start and end times for today using the stored times
 		const startTime = new Date(now);
-		startTime.setHours(todaySchedule.startTime.getHours(), todaySchedule.startTime.getMinutes(), todaySchedule.startTime.getSeconds() || 0, 0);
+		startTime.setHours(
+			todaySchedule.startTime.getHours(),
+			todaySchedule.startTime.getMinutes(),
+			todaySchedule.startTime.getSeconds() || 0,
+			0
+		);
 		const endTime = new Date(now);
 		endTime.setHours(todaySchedule.endTime.getHours(), todaySchedule.endTime.getMinutes(), todaySchedule.endTime.getSeconds() || 0, 0);
 
@@ -107,11 +118,12 @@ app.get('/activities', async (c) => {
 		// For recurring activities, fetch schedules and calculate dynamic status
 		const enrichedActivities = await Promise.all(
 			activitiesList.map(async (activity) => {
+				let result = { ...activity };
 				if (activity.type === 'recurring') {
 					const schedules = await db.select().from(activitySchedules).where(eq(activitySchedules.activityId, activity.id)).execute();
 					const dynamicStatus = getRecurringActivityStatus(schedules);
-					return {
-						...activity,
+					result = {
+						...result,
 						schedules,
 						currentStatus: dynamicStatus,
 					};
@@ -128,12 +140,13 @@ app.get('/activities', async (c) => {
 							dynamicStatus = 'completed';
 						}
 					}
-					return {
-						...activity,
+					result = {
+						...result,
 						currentStatus: dynamicStatus,
 					};
 				}
-				return activity;
+				// Omit id fields from each activity
+				return omitActivityIds(result);
 			})
 		);
 		return c.json({ activities: enrichedActivities }, 200);
@@ -149,40 +162,26 @@ app.get('/activities', async (c) => {
 // For recurring activities, include schedules and dynamic status
 // -----------------------------
 
-app.get('/activities/:id', async (c) => {
+app.get('/activities/:slug', async (c) => {
 	try {
 		const organizer = c.get('organizer');
-		const activityId = c.req.param('id');
-		if (!activityId || typeof activityId !== 'string') return c.json({ error: 'Invalid activity id' }, 400);
+		const activitySlug = c.req.param('slug');
+		if (!activitySlug || typeof activitySlug !== 'string') return c.json({ error: 'Invalid activity slug' }, 400);
 		// Ensure the activity belongs to this organizer
 		const activityQuery = await db
 			.select()
 			.from(activities)
 			.leftJoin(clubs, eq(clubs.id, activities.clubId))
-			.where(and(
-				eq(activities.id, activityId),
-				// Only check organizer if club is present
-				sql`(${activities.clubId} IS NULL OR ${clubs.organizerId} = ${organizer.id})`
-			))
+			.where(and(eq(activities.slug, activitySlug), sql`(${activities.clubId} IS NULL OR ${clubs.organizerId} = ${organizer.id})`))
 			.limit(1)
 			.execute();
 		const activity = activityQuery[0];
 		if (!activity) return c.json({ error: 'Activity not found' }, 404);
+		let result: any = { ...activity.activities };
 		if (activity.activities.type === 'recurring') {
-			const schedules = await db
-				.select()
-				.from(activitySchedules)
-				.where(eq(activitySchedules.activityId, activityId))
-				.execute();
+			const schedules = await db.select().from(activitySchedules).where(eq(activitySchedules.activityId, activity.activities.id)).execute();
 			const dynamicStatus = getRecurringActivityStatus(schedules);
-			return c.json({
-				activity: {
-					...activity.activities,
-					club: activity.clubs,
-					schedules,
-					currentStatus: dynamicStatus,
-				},
-			}, 200);
+			result = { ...result, schedules, currentStatus: dynamicStatus };
 		} else if (activity.activities.type === 'one-time') {
 			// Dynamically calculate status for one-time activities
 			const now = new Date();
@@ -196,20 +195,11 @@ app.get('/activities/:id', async (c) => {
 					dynamicStatus = 'completed';
 				}
 			}
-			return c.json({
-				activity: {
-					...activity.activities,
-					club: activity.clubs,
-					currentStatus: dynamicStatus,
-				},
-			}, 200);
+			result = { ...result, currentStatus: dynamicStatus };
 		}
-		return c.json({
-			activity: {
-				...activity.activities,
-				club: activity.clubs,
-			},
-		}, 200);
+		// Remove id fields from activity and club
+		const cleanClub = activity.clubs ? omitClubIds(activity.clubs) : undefined;
+		return c.json({ activity: { ...omitActivityIds(result), club: cleanClub } }, 200);
 	} catch (error) {
 		console.error('Error fetching activity:', error);
 		return c.json({ error: 'Internal Server Error' }, 500);
@@ -232,7 +222,7 @@ app.post('/activities', async (c) => {
 		const body = await c.req.json();
 
 		const {
-			clubId,
+			clubSlug,
 			name,
 			slug,
 			description,
@@ -251,15 +241,15 @@ app.post('/activities', async (c) => {
 		} = body;
 
 		// Validation
-		if (!clubId || !name || !slug) {
-			return c.json({ error: 'Missing required fields: clubId, name, slug' }, 400);
+		if (!clubSlug || !name || !slug) {
+			return c.json({ error: 'Missing required fields: clubSlug, name, slug' }, 400);
 		}
 
-		// Verify club belongs to organizer
+		// Lookup club by slug
 		const [club] = await db
 			.select()
 			.from(clubs)
-			.where(and(eq(clubs.id, clubId), eq(clubs.organizerId, organizer.id)))
+			.where(eq(clubs.slug, clubSlug))
 			.limit(1)
 			.execute();
 
@@ -298,7 +288,7 @@ app.post('/activities', async (c) => {
 			.insert(activities)
 			.values({
 				id: activityId,
-				clubId,
+				clubId: club.id,
 				name,
 				slug,
 				description: description || null,
@@ -333,7 +323,7 @@ app.post('/activities', async (c) => {
 			await db.insert(activitySchedules).values(scheduleValues).execute();
 		}
 
-		return c.json({ activity: newActivity, message: 'Activity created successfully' }, 201);
+		return c.json({ activity: omitActivityIds(newActivity), message: 'Activity created successfully' }, 201);
 	} catch (error) {
 		console.error('Error creating activity:', error);
 		return c.json({ error: 'Internal Server Error' }, 500);
@@ -344,7 +334,7 @@ app.post('/activities', async (c) => {
 // PUT /activities/:id
 // Update an existing activity
 // -----------------------------
-app.put('/activities/:id', async (c) => {
+app.put('/activities/:slug', async (c) => {
 	try {
 		const organizer = c.get('organizer');
 
@@ -352,8 +342,8 @@ app.put('/activities/:id', async (c) => {
 			return c.json({ error: 'No organizer found for this domain' }, 404);
 		}
 
-		const activityId = c.req.param('id');
-		if (!activityId || typeof activityId !== 'string') return c.json({ error: 'Invalid activity id' }, 400);
+		const activitySlug = c.req.param('slug');
+		if (!activitySlug || typeof activitySlug !== 'string') return c.json({ error: 'Invalid activity slug' }, 400);
 
 		const body = await c.req.json();
 
@@ -362,7 +352,7 @@ app.put('/activities/:id', async (c) => {
 			.select()
 			.from(activities)
 			.innerJoin(clubs, eq(clubs.id, activities.clubId))
-			.where(and(eq(activities.id, activityId), eq(clubs.organizerId, organizer.id)))
+			.where(and(eq(activities.slug, activitySlug), eq(clubs.organizerId, organizer.id)))
 			.limit(1)
 			.execute();
 
@@ -397,26 +387,18 @@ app.put('/activities/:id', async (c) => {
 		}
 
 		// Update activity
-		const [updatedActivity] = await db
-			.update(activities)
-			.set(updateData)
-			.where(eq(activities.id, activityId))
-			.returning()
-			.execute();
+		const [updatedActivity] = await db.update(activities).set(updateData).where(eq(activities.slug, activitySlug)).returning().execute();
 
 		// Handle schedule updates for recurring activities
 		if (existingActivity.type === 'recurring' && body.schedules) {
 			// Delete existing schedules
-			await db
-				.delete(activitySchedules)
-				.where(eq(activitySchedules.activityId, activityId))
-				.execute();
+			await db.delete(activitySchedules).where(eq(activitySchedules.activityId, existingActivity.id)).execute();
 
 			// Insert new schedules
 			if (body.schedules.length > 0) {
 				const scheduleValues = body.schedules.map((schedule: any) => ({
 					id: generateSecureRandomId(),
-					activityId,
+					activityId: existingActivity.id,
 					dayOfWeek: schedule.dayOfWeek,
 					startTime: new Date(schedule.startTime),
 					endTime: new Date(schedule.endTime),
@@ -426,7 +408,7 @@ app.put('/activities/:id', async (c) => {
 			}
 		}
 
-		return c.json({ activity: updatedActivity, message: 'Activity updated successfully' }, 200);
+		return c.json({ activity: omitActivityIds(updatedActivity), message: 'Activity updated successfully' }, 200);
 	} catch (error) {
 		console.error('Error updating activity:', error);
 		return c.json({ error: 'Internal Server Error' }, 500);
@@ -437,7 +419,7 @@ app.put('/activities/:id', async (c) => {
 // DELETE /activities/:id
 // Soft delete an activity
 // -----------------------------
-app.delete('/activities/:id', async (c) => {
+app.delete('/activities/:slug', async (c) => {
 	try {
 		const organizer = c.get('organizer');
 
@@ -445,15 +427,15 @@ app.delete('/activities/:id', async (c) => {
 			return c.json({ error: 'No organizer found for this domain' }, 404);
 		}
 
-		const activityId = c.req.param('id');
-		if (!activityId || typeof activityId !== 'string') return c.json({ error: 'Invalid activity id' }, 400);
+		const activitySlug = c.req.param('slug');
+		if (!activitySlug || typeof activitySlug !== 'string') return c.json({ error: 'Invalid activity slug' }, 400);
 
 		// Verify activity belongs to organizer
 		const activityQuery = await db
 			.select()
 			.from(activities)
 			.innerJoin(clubs, eq(clubs.id, activities.clubId))
-			.where(and(eq(activities.id, activityId), eq(clubs.organizerId, organizer.id)))
+			.where(and(eq(activities.slug, activitySlug), eq(clubs.organizerId, organizer.id)))
 			.limit(1)
 			.execute();
 
@@ -466,7 +448,7 @@ app.delete('/activities/:id', async (c) => {
 				isActive: false,
 				deletedAt: new Date(),
 			})
-			.where(eq(activities.id, activityId))
+			.where(eq(activities.slug, activitySlug))
 			.execute();
 
 		return c.json({ message: 'Activity deleted successfully' }, 200);
@@ -481,11 +463,11 @@ app.delete('/activities/:id', async (c) => {
 // Update activity status manually (for one-time activities)
 // For recurring, status is calculated dynamically
 // -----------------------------
-app.patch('/activities/:id/status', async (c) => {
+app.patch('/activities/:slug/status', async (c) => {
 	try {
 		const organizer = c.get('organizer');
-		const activityId = c.req.param('id');
-		if (!activityId || typeof activityId !== 'string') return c.json({ error: 'Invalid activity id' }, 400);
+		const activitySlug = c.req.param('slug');
+		if (!activitySlug || typeof activitySlug !== 'string') return c.json({ error: 'Invalid activity slug' }, 400);
 
 		const { status } = await c.req.json();
 		const validStatuses = ['upcoming', 'live', 'completed', 'canceled'] as const;
@@ -499,7 +481,7 @@ app.patch('/activities/:id/status', async (c) => {
 			.select()
 			.from(activities)
 			.innerJoin(clubs, eq(clubs.id, activities.clubId))
-			.where(and(eq(activities.id, activityId), eq(clubs.organizerId, organizer.id)))
+			.where(and(eq(activities.slug, activitySlug), eq(clubs.organizerId, organizer.id)))
 			.limit(1)
 			.execute();
 
@@ -521,15 +503,38 @@ app.patch('/activities/:id/status', async (c) => {
 		const [updatedActivity] = await db
 			.update(activities)
 			.set({ status, updatedAt: new Date() })
-			.where(eq(activities.id, activityId))
+			.where(eq(activities.slug, activitySlug))
 			.returning()
 			.execute();
 
-		return c.json({ activity: updatedActivity, message: 'Status updated successfully' }, 200);
+		return c.json({ activity: omitActivityIds(updatedActivity), message: 'Status updated successfully' }, 200);
 	} catch (error) {
 		console.error('Error updating status:', error);
 		return c.json({ error: 'Internal Server Error' }, 500);
 	}
 });
+
+function omitActivityIds(result: any): any {
+	if (!result) return result;
+	// Shallow copy first level excluding common id fields
+	const { id, clubId, organizerId, activityId, ...rest } = result;
+
+	// If there are schedules, remove their id/activityId fields as well
+	if (Array.isArray(rest.schedules)) {
+		rest.schedules = rest.schedules.map((s: any) => {
+			if (!s || typeof s !== 'object') return s;
+			const { id: _sid, activityId: _sa, ...scheduleRest } = s;
+			return scheduleRest;
+		});
+	}
+
+	// If there are any nested objects that commonly contain ids, strip them too
+	if (rest.organizer && typeof rest.organizer === 'object') {
+		const { id: _orgId, organizerId: _orgId2, ...orgRest } = rest.organizer;
+		rest.organizer = orgRest;
+	}
+
+	return rest;
+}
 
 export default app;

@@ -106,13 +106,11 @@ app.post('/activities/:slug/register', async (c) => {
 				id: userId,
 				firstName,
 				lastName,
-				email: email || null,
 				phone: phone || null,
+				email: email || null,
 				isActive: true,
-				passwordHash: null, // Explicitly set to null for registrations without password
 			};
-			// Only set passwordHash if a password is present (for organizer or future flows)
-			// For normal registrations, set passwordHash to null
+			// Don't include passwordHash at all - let the database handle it
 			[user] = await db
 				.insert(users)
 				.values(userValues)

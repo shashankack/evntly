@@ -21,6 +21,7 @@
 	"dependencies": {
 		"@neondatabase/serverless": "^1.0.2",
 		"@types/jsonwebtoken": "^9.0.10",
+		"bcryptjs": "^3.0.2",
 		"crypto": "^1.0.1",
 		"drizzle-kit": "^0.31.5",
 		"drizzle-orm": "^0.44.6",

@@ -5,6 +5,8 @@ import activitiesRouter from './routes/activities';
 import registerRouter from './routes/register';
 import clubRegisterRouter from './routes/clubRegister';
 import organizersRouter from './routes/organizers';
+import organizerRegistrationsRouter from './routes/organizerRegistrations';
+import generatePasswordHashRouter from './routes/generatePasswordHash';
 
 const app = new Hono();
 
@@ -26,7 +28,7 @@ app.use(
 			return allowedOrigins[0]; // Default to first allowed origin
 		},
 		allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-		allowHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'ngrok-skip-browser-warning'],
+	allowHeaders: ['Content-Type', 'X-Requested-With', 'ngrok-skip-browser-warning'],
 		exposeHeaders: ['Content-Length', 'X-Request-Id'],
 		maxAge: 86400, // 24 hours
 		credentials: true,
@@ -48,6 +50,8 @@ app.route('/', activitiesRouter);
 app.route('/', registerRouter);
 app.route('/', clubRegisterRouter);
 app.route('/', organizersRouter);
+app.route('/', organizerRegistrationsRouter);
+app.route('/', generatePasswordHashRouter);
 
 // 404 handler
 app.notFound((c) => {

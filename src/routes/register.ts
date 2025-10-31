@@ -3,19 +3,17 @@ import { Hono } from 'hono';
 import { db } from '../db/client';
 import { activities, activityRegistrations, activitySchedules, payments, users, organizers } from '../db/schema';
 import { eq, and, sql } from 'drizzle-orm';
-import { originResolver } from '../middleware/originResolver';
 import { generateSecureRandomId } from '../utils/idGenerator';
 import { sendRegistrationEmail } from '../utils/email';
 
 const app = new Hono();
 
-// Resolve organizer from Origin/Host header for domain-scoped requests
-app.use('*', originResolver);
 
-app.post('/activities/:id/register', async (c) => {
+
+app.post('/activities/:slug/register', async (c) => {
 	try {
-		const activityId = c.req.param('id');
-		if (!activityId || typeof activityId !== 'string') return c.json({ error: 'Invalid activity ID' }, 400);
+		const activitySlug = c.req.param('slug');
+		if (!activitySlug || typeof activitySlug !== 'string') return c.json({ error: 'Invalid activity slug' }, 400);
 
 		const body = await c.req.json<{
 			firstName: string;
@@ -28,10 +26,16 @@ app.post('/activities/:id/register', async (c) => {
 		const { firstName, lastName, email, phone, ticketCount = 1 } = body;
 		if (!firstName || !lastName || (!email && !phone)) return c.json({ error: 'Missing required user details' }, 400);
 
-		// Get activity
-		const [activity] = await db.select().from(activities).where(eq(activities.id, activityId)).limit(1).execute();
-
+		// Get activity by slug
+		const [activity] = await db.select().from(activities).where(eq(activities.slug, activitySlug)).limit(1).execute();
 		if (!activity) return c.json({ error: 'Activity not found' }, 404);
+
+		// Security check: Only allow registration for active and open activities
+		if (!activity.isActive || !activity.isRegistrationOpen) {
+			return c.json({ error: 'Registration is not open for this activity' }, 403);
+		}
+
+		// Optionally: Add more security checks here (e.g., rate limiting, domain checks, etc.)
 
 		// Get organizer info for email and payment configuration
 		let organizer = null;
@@ -112,12 +116,12 @@ app.post('/activities/:id/register', async (c) => {
 		}
 
 		// Find existing registration
-		const existing = await db
-			.select()
-			.from(activityRegistrations)
-			.where(and(eq(activityRegistrations.activityId, activityId), eq(activityRegistrations.userId, user.id)))
-			.limit(1)
-			.execute();
+			const existing = await db
+				.select()
+				.from(activityRegistrations)
+				.where(and(eq(activityRegistrations.activityId, activity.id), eq(activityRegistrations.userId, user.id)))
+				.limit(1)
+				.execute();
 
 		let registration;
 		let additionalTickets = ticketCount;
@@ -147,7 +151,7 @@ app.post('/activities/:id/register', async (c) => {
 				.insert(activityRegistrations)
 				.values({
 					id: registrationId,
-					activityId,
+					  activityId: activity.id,
 					userId: user.id,
 					status: 'registered',
 					ticketCount,
@@ -214,7 +218,7 @@ app.post('/activities/:id/register', async (c) => {
 				.set({
 					bookedSlots: sql`${activities.bookedSlots} + ${additionalTickets}`,
 				})
-				.where(eq(activities.id, activityId))
+			.where(eq(activities.id, activity.id))
 				.execute();
 
 			return c.json(

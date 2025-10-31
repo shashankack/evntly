@@ -14,7 +14,7 @@ export const users = pgTable('users', {
 	lastName: varchar('last_name', { length: 100 }).notNull(),
 	phone: varchar('phone', { length: 20 }).unique(),
 	email: varchar('email', { length: 255 }).unique(),
-	passwordHash: varchar('password_hash', { length: 255 }).default(''),
+	passwordHash: varchar('password_hash', { length: 255 }),
 	socialAccounts: jsonb('social_accounts').default('{}'),
 	isActive: boolean('is_active').default(true).notNull(),
 	lastLogin: timestamp('last_login'),

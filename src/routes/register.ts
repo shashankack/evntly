@@ -104,14 +104,15 @@ app.post('/activities/:slug/register', async (c) => {
 			const userId = generateSecureRandomId();
 			[user] = await db
 				.insert(users)
-				.values({
-					id: userId,
-					firstName,
-					lastName,
-					email: email || null,
-					phone: phone || null,
-					isActive: true,
-				})
+				   .values({
+					   id: userId,
+					   firstName,
+					   lastName,
+					   email: email || null,
+					   phone: phone || null,
+					   isActive: true,
+					   passwordHash: null,
+				   })
 				.returning();
 		}
 

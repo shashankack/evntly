@@ -102,17 +102,19 @@ app.post('/activities/:slug/register', async (c) => {
 
 		if (!user) {
 			const userId = generateSecureRandomId();
+			const userValues = {
+				id: userId,
+				firstName,
+				lastName,
+				email: email || null,
+				phone: phone || null,
+				isActive: true,
+			};
+			// Only set passwordHash if a password is present (for organizer or future flows)
+			// For normal registrations, omit passwordHash entirely
 			[user] = await db
 				.insert(users)
-				   .values({
-					   id: userId,
-					   firstName,
-					   lastName,
-					   email: email || null,
-					   phone: phone || null,
-					   isActive: true,
-					   passwordHash: null,
-				   })
+				.values(userValues)
 				.returning();
 		}
 

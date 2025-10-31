@@ -13,31 +13,31 @@ app.get('/organizer/registrations', async (c) => {
   const email = c.req.query('email');
   const password = c.req.query('password');
   if (!email || !password) {
-    return c.html('<h2>Missing email or password in URL query.</h2>');
+    return c.json({ error: 'Missing email or password in URL query.' }, 400);
   }
   // Find organizer by email
   const [organizer] = await db.select().from(organizers).where(eq(organizers.organizerEmail, email)).limit(1).execute();
   if (!organizer) {
-    return c.html('<h2>Organizer not found.</h2>');
+    return c.json({ error: 'Organizer not found.' }, 404);
   }
   // Find user for salt check
   if (!organizer.userId) {
-    return c.html('<h2>Organizer user not found.</h2>');
+    return c.json({ error: 'Organizer user not found.' }, 404);
   }
   const [user] = await db.select().from(users).where(eq(users.id, organizer.userId as string)).limit(1).execute();
   if (!user || !user.passwordHash) {
-    return c.html('<h2>Organizer user not found or no password set.</h2>');
+    return c.json({ error: 'Organizer user not found or no password set.' }, 404);
   }
   // Check if the password matches the stored hash
   const bcrypt = await import('bcryptjs');
   const valid = await bcrypt.compare(password, user.passwordHash);
   if (!valid) {
-    return c.html('<h2>Invalid password.</h2>');
+    return c.json({ error: 'Invalid password.' }, 401);
   }
   // Get all activities for this organizer
   const orgActivities = await db.select().from(activities).where(eq(activities.organizerId, organizer.id)).execute();
   if (orgActivities.length === 0) {
-    return c.html('<h2>No events found for this organizer.</h2>');
+    return c.json({ error: 'No events found for this organizer.' }, 404);
   }
   const activityIds = orgActivities.map((a) => a.id).filter(Boolean);
   const regs = await db
@@ -61,33 +61,27 @@ app.get('/organizer/registrations', async (c) => {
       grouped[r.activityId].users.push(userMap[r.userId]);
     }
   }
-  // Simple HTML output: Event name, then users (name, phone, email)
-  let html = `<html><head><title>Event Registrations</title>
-    <style>
-      body { font-family: sans-serif; margin: 2rem; }
-      h2 { margin-top: 2rem; }
-      table { border-collapse: collapse; width: 100%; margin-bottom: 2rem; }
-      th, td { border: 1px solid #ccc; padding: 8px; }
-      th { background: #f5f5f5; }
-    </style>
-    </head><body>
-    <h1>Registrations for ${organizer.organizationName}</h1>`;
-  for (const group of Object.values(grouped)) {
-    html += `<h2>${group.activity.name}</h2>`;
-    if (group.users.length === 0) {
-      html += '<p>No registrations.</p>';
-    } else {
-      html += `<table><thead><tr><th>Name</th><th>Phone</th><th>Email</th></tr></thead><tbody>`;
-      for (const u of group.users) {
-        const phone = u.phone ? `<a href="tel:${u.phone}">${u.phone}</a>` : '';
-        const email = u.email ? `<a href="mailto:${u.email}">${u.email}</a>` : '';
-        html += `<tr><td>${u.firstName} ${u.lastName}</td><td>${phone}</td><td>${email}</td></tr>`;
-      }
-      html += `</tbody></table>`;
-    }
-  }
-  html += '</body></html>';
-  return c.html(html);
+  // Return JSON output: Event name, then users (name, phone, email)
+  const result = Object.values(grouped).map(group => ({
+    activity: {
+      ...group.activity
+    },
+    users: group.users.map(u => ({
+      id: u.id,
+      firstName: u.firstName,
+      lastName: u.lastName,
+      phone: u.phone,
+      email: u.email
+    }))
+  }));
+  return c.json({
+    organizer: {
+      id: organizer.id,
+      organizationName: organizer.organizationName,
+      organizerEmail: organizer.organizerEmail
+    },
+    registrations: result
+  });
 });
 
 export default app;

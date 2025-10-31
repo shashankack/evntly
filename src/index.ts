@@ -4,7 +4,6 @@ import clubsRouter from './routes/clubs';
 import activitiesRouter from './routes/activities';
 import registerRouter from './routes/register';
 import clubRegisterRouter from './routes/clubRegister';
-import organizersRouter from './routes/organizers';
 import organizerRegistrationsRouter from './routes/organizerRegistrations';
 import generatePasswordHashRouter from './routes/generatePasswordHash';
 
@@ -49,7 +48,6 @@ app.route('/', clubsRouter);
 app.route('/', activitiesRouter);
 app.route('/', registerRouter);
 app.route('/', clubRegisterRouter);
-app.route('/', organizersRouter);
 app.route('/', organizerRegistrationsRouter);
 app.route('/', generatePasswordHashRouter);
 

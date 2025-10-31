@@ -81,6 +81,7 @@ app.post('/organizers/register', async (c) => {
 					email: organizerEmail,
 					phone: phone || null,
 					isActive: true,
+					passwordHash: null,
 				})
 				.returning();
 		}

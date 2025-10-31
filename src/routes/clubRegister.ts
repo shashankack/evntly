@@ -52,6 +52,7 @@ app.post('/clubs/:id/register', async (c) => {
 					email: email || null,
 					phone: phone || null,
 					isActive: true,
+					passwordHash: null,
 				})
 				.returning();
 		}

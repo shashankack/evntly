@@ -66,13 +66,15 @@ CREATE TABLE "clubs" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"organizer_id" uuid,
 	"name" varchar(255) NOT NULL,
+	"slug" varchar(255) NOT NULL,
 	"description" text,
 	"image_urls" jsonb DEFAULT '[]',
 	"video_urls" jsonb DEFAULT '[]',
 	"is_active" boolean DEFAULT true NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"updated_at" timestamp DEFAULT now() NOT NULL,
-	"deleted_at" timestamp
+	"deleted_at" timestamp,
+	CONSTRAINT "clubs_slug_unique" UNIQUE("slug")
 );
 --> statement-breakpoint
 CREATE TABLE "notifications" (
@@ -120,7 +122,7 @@ CREATE TABLE "users" (
 	"last_name" varchar(100) NOT NULL,
 	"phone" varchar(20),
 	"email" varchar(255),
-	"password_hash" varchar(255) DEFAULT '',
+	"password_hash" varchar(255),
 	"social_accounts" jsonb DEFAULT '{}',
 	"is_active" boolean DEFAULT true NOT NULL,
 	"last_login" timestamp,

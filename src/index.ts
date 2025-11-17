@@ -6,6 +6,7 @@ import registerRouter from './routes/register';
 import clubRegisterRouter from './routes/clubRegister';
 import organizerRegistrationsRouter from './routes/organizerRegistrations';
 import generatePasswordHashRouter from './routes/generatePasswordHash';
+import webhooksRouter from './routes/webhooks';
 
 const app = new Hono();
 
@@ -50,6 +51,7 @@ app.route('/', registerRouter);
 app.route('/', clubRegisterRouter);
 app.route('/', organizerRegistrationsRouter);
 app.route('/', generatePasswordHashRouter);
+app.route('/', webhooksRouter);
 
 // 404 handler
 app.notFound((c) => {

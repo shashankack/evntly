@@ -5,6 +5,7 @@ import { activities, activityRegistrations, activitySchedules, payments, users, 
 import { eq, and, sql } from 'drizzle-orm';
 import { generateSecureRandomId } from '../utils/idGenerator';
 import { sendRegistrationEmail } from '../utils/email';
+import Razorpay from 'razorpay';
 
 const app = new Hono();
 
@@ -25,6 +26,11 @@ app.post('/activities/:slug/register', async (c) => {
 
 		const { firstName, lastName, email, phone, ticketCount = 1 } = body;
 		if (!firstName || !lastName || (!email && !phone)) return c.json({ error: 'Missing required user details' }, 400);
+
+		// Validate ticketCount (max 4 tickets per registration)
+		if (ticketCount < 1 || ticketCount > 4) {
+			return c.json({ error: 'Ticket count must be between 1 and 4' }, 400);
+		}
 
 		// Get activity by slug
 		const [activity] = await db.select().from(activities).where(eq(activities.slug, activitySlug)).limit(1).execute();
@@ -169,15 +175,27 @@ app.post('/activities/:slug/register', async (c) => {
 		// Send confirmation email for ALL registrations
 		// ------------------------
 		if (email && organizer) {
+			console.log('\n========== EMAIL SENDING ATTEMPT ==========');
 			console.log('📧 Attempting to send confirmation email to:', email);
-			console.log('Organizer details:', {
+			console.log('📋 Full Organizer details:', {
+				id: organizer.id,
 				organizationName: organizer.organizationName,
 				organizerEmail: organizer.organizerEmail,
+				systemEmail: organizer.systemEmail,
 				hasResendApiKey: !!organizer.resendApiKey,
-				hasSystemEmail: !!organizer.systemEmail,
+				resendApiKeyLength: organizer.resendApiKey?.length,
+				resendApiKeyPrefix: organizer.resendApiKey?.substring(0, 7),
+			});
+			console.log('🎫 Email parameters:', {
+				userEmail: email,
+				userName: `${firstName} ${lastName}`,
+				activityName: activity.name,
+				ticketCount,
+				venueName: activity.venueName,
 			});
 
 			try {
+				console.log('🚀 Calling sendRegistrationEmail function...');
 				const emailResult = await sendRegistrationEmail(
 					email,
 					`${firstName} ${lastName}`,
@@ -191,13 +209,22 @@ app.post('/activities/:slug/register', async (c) => {
 					organizer.systemEmail // Pass organizer's system email
 				);
 
+				console.log('📬 Email send result:', JSON.stringify(emailResult, null, 2));
+
 				if (emailResult.success) {
-					console.log('✅ Registration confirmation email sent successfully to:', email, 'MessageId:', emailResult.messageId);
+					console.log('✅✅✅ Registration confirmation email sent successfully!');
+					console.log('   → To:', email);
+					console.log('   → Message ID:', emailResult.messageId);
 				} else {
-					console.error('❌ Failed to send registration email:', emailResult.error);
+					console.error('❌❌❌ Failed to send registration email!');
+					console.error('   → Error:', emailResult.error);
 				}
+				console.log('========== EMAIL SENDING COMPLETE ==========\n');
 			} catch (emailError) {
-				console.error('❌ Exception while sending registration email:', emailError);
+				console.error('❌❌❌ EXCEPTION while sending registration email!');
+				console.error('Exception details:', emailError);
+				console.error('Exception stack:', (emailError as Error).stack);
+				console.log('========== EMAIL SENDING FAILED ==========\n');
 				// Don't fail the registration if email fails
 			}
 		} else {
@@ -215,12 +242,13 @@ app.post('/activities/:slug/register', async (c) => {
 		if (registrationFee === 0) {
 			console.log('🎉 Processing FREE activity registration - completing immediately');
 
+			// Update booked slots immediately for free events
 			await db
 				.update(activities)
 				.set({
 					bookedSlots: sql`${activities.bookedSlots} + ${additionalTickets}`,
 				})
-			.where(eq(activities.id, activity.id))
+				.where(eq(activities.id, activity.id))
 				.execute();
 
 			return c.json(
@@ -241,6 +269,11 @@ app.post('/activities/:slug/register', async (c) => {
 		console.log('Payment method:', paymentMethod);
 
 		const paymentId = generateSecureRandomId();
+		
+		let paymentInfo: Record<string, any> = {};
+		let razorpayOrderId: string | undefined = undefined;
+
+		// Create payment record first (before Razorpay order creation)
 		const [payment] = await db
 			.insert(payments)
 			.values({
@@ -249,24 +282,60 @@ app.post('/activities/:slug/register', async (c) => {
 				amount: String((registrationFee / 100) * additionalTickets),
 				status: 'pending',
 				paymentMethod: paymentMethod,
+				providerPaymentId: null, // Will update after Razorpay order creation
 			})
 			.returning();
 
-		let paymentInfo: Record<string, any> = {};
-		if (paymentMethod === 'razorpay') {
-			paymentInfo = {
-				type: 'razorpay',
-				orderId: `order_${payment.id}`,
-				amount: registrationFee * additionalTickets,
-				currency: 'INR',
-			};
-		} else {
+		// Create Razorpay order asynchronously if using Razorpay
+		if (paymentMethod === 'razorpay' && organizer) {
+			try {
+				console.log('🔑 Creating Razorpay order...');
+				const razorpayInstance = new Razorpay({
+					key_id: organizer.razorpayKeyId!,
+					key_secret: organizer.razorpayKeySecret!,
+				});
+
+				const razorpayOrder = await razorpayInstance.orders.create({
+					amount: registrationFee * additionalTickets, // amount in paise
+					currency: 'INR',
+					receipt: paymentId,
+					notes: {
+						activityId: activity.id,
+						activityName: activity.name,
+						registrationId: registration.id,
+						userId: user.id,
+						ticketCount: String(additionalTickets),
+					},
+				});
+
+				razorpayOrderId = razorpayOrder.id;
+				console.log('✅ Razorpay order created:', razorpayOrderId);
+
+				// Update payment record with Razorpay order ID
+				await db
+					.update(payments)
+					.set({ providerPaymentId: razorpayOrderId })
+					.where(eq(payments.id, payment.id))
+					.execute();
+
+				paymentInfo = {
+					type: 'razorpay',
+					razorpayKeyId: organizer.razorpayKeyId, // Pass Razorpay Key ID to frontend
+					orderId: razorpayOrderId, // Use actual Razorpay order ID
+					amount: registrationFee * additionalTickets,
+					currency: 'INR',
+				};
+			} catch (razorpayError) {
+				console.error('❌ Failed to create Razorpay order:', razorpayError);
+				return c.json({ error: 'Failed to initialize payment gateway' }, 500);
+			}
+		} else if (paymentMethod === 'manual') {
 			// Use organizer.domain if available, fallback to env or default
 			const frontendDomain = organizer?.websiteDomain;
 			paymentInfo = {
 				type: 'manual',
-				paymentPage: `${frontendDomain}/pay/${payment.id}`,
-				qrCodeUrl: `${frontendDomain}/qr/${payment.id}`,
+				paymentPage: `${frontendDomain}/pay/${paymentId}`,
+				qrCodeUrl: `${frontendDomain}/qr/${paymentId}`,
 			};
 		}
 

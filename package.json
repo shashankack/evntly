@@ -27,6 +27,7 @@
 		"drizzle-orm": "^0.44.6",
 		"hono": "^4.10.1",
 		"jsonwebtoken": "^9.0.2",
+		"razorpay": "^2.9.6",
 		"resend": "^6.2.0"
 	}
 }

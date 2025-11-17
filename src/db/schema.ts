@@ -34,6 +34,7 @@ export const organizers = pgTable('organizers', {
 	resendApiKey: varchar('resend_api_key', { length: 500 }), // Organizer's Resend API key
 	razorpayKeyId: varchar('razorpay_key_id', { length: 255 }), // Organizer's Razorpay Key ID
 	razorpayKeySecret: varchar('razorpay_key_secret', { length: 255 }), // Organizer's Razorpay Key Secret
+	razorpayWebhookSecret: varchar('razorpay_webhook_secret', { length: 255 }), // Organizer's Razorpay Webhook Secret
 	isActive: boolean('is_active').default(true).notNull(),
 	createdAt: timestamp('created_at').defaultNow().notNull(),
 	updatedAt: timestamp('updated_at').defaultNow().notNull(),

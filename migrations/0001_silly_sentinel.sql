@@ -1,0 +1,1 @@
+ALTER TABLE "organizers" ADD COLUMN "razorpay_webhook_secret" varchar(255);

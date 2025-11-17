@@ -28,7 +28,7 @@ app.use(
 			return allowedOrigins[0]; // Default to first allowed origin
 		},
 		allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-	allowHeaders: ['Content-Type', 'X-Requested-With', 'ngrok-skip-browser-warning'],
+		allowHeaders: ['Content-Type', 'X-Requested-With', 'ngrok-skip-browser-warning', 'authorization'],
 		exposeHeaders: ['Content-Length', 'X-Request-Id'],
 		maxAge: 86400, // 24 hours
 		credentials: true,

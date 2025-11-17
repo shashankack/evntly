@@ -7,35 +7,49 @@ import { eq, and, inArray } from 'drizzle-orm';
 const app = new Hono();
 
 
-// GET /organizer/registrations - List all registrations for events under this domain
-app.get('/organizer/registrations', async (c) => {
-  // Accept organizerEmail and password as query params
-  const email = c.req.query('email');
-  const password = c.req.query('password');
+
+import jwt from 'jsonwebtoken';
+const JWT_SECRET = process.env.JWT_SECRET || 'changeme-in-prod';
+
+// POST /organizer/login - returns JWT if credentials are valid
+app.post('/organizer/login', async (c) => {
+  const { email, password } = await c.req.json();
   if (!email || !password) {
-    return c.json({ error: 'Missing email or password in URL query.' }, 400);
+    return c.json({ error: 'Missing email or password.' }, 400);
   }
-  // Find organizer by email
   const [organizer] = await db.select().from(organizers).where(eq(organizers.organizerEmail, email)).limit(1).execute();
-  if (!organizer) {
+  if (!organizer || !organizer.userId) {
     return c.json({ error: 'Organizer not found.' }, 404);
-  }
-  // Find user for salt check
-  if (!organizer.userId) {
-    return c.json({ error: 'Organizer user not found.' }, 404);
   }
   const [user] = await db.select().from(users).where(eq(users.id, organizer.userId as string)).limit(1).execute();
   if (!user || !user.passwordHash) {
     return c.json({ error: 'Organizer user not found or no password set.' }, 404);
   }
-  // Check if the password matches the stored hash
   const bcrypt = await import('bcryptjs');
   const valid = await bcrypt.compare(password, user.passwordHash);
   if (!valid) {
     return c.json({ error: 'Invalid password.' }, 401);
   }
+  // Issue JWT
+  const token = jwt.sign({ organizerId: organizer.id, email: organizer.organizerEmail }, JWT_SECRET, { expiresIn: '2h' });
+  return c.json({ token });
+});
+
+// GET /organizer/registrations - now requires Bearer token
+app.get('/organizer/registrations', async (c) => {
+  const auth = c.req.header('authorization');
+  if (!auth || !auth.startsWith('Bearer ')) {
+    return c.json({ error: 'Missing or invalid Authorization header.' }, 401);
+  }
+  let organizerId;
+  try {
+    const payload = jwt.verify(auth.replace('Bearer ', ''), JWT_SECRET) as { organizerId: string };
+    organizerId = payload.organizerId;
+  } catch (e) {
+    return c.json({ error: 'Invalid or expired token.' }, 401);
+  }
   // Get all activities for this organizer
-  const orgActivities = await db.select().from(activities).where(eq(activities.organizerId, organizer.id)).execute();
+  const orgActivities = await db.select().from(activities).where(eq(activities.organizerId, organizerId)).execute();
   if (orgActivities.length === 0) {
     return c.json({ error: 'No events found for this organizer.' }, 404);
   }
@@ -74,6 +88,8 @@ app.get('/organizer/registrations', async (c) => {
       email: u.email
     }))
   }));
+  // Get organizer info
+  const [organizer] = await db.select().from(organizers).where(eq(organizers.id, organizerId)).limit(1).execute();
   return c.json({
     organizer: {
       id: organizer.id,

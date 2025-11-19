@@ -88,7 +88,7 @@ app.get('/activities', async (c) => {
 			return c.json({ error: 'No organizer found for this domain' }, 404);
 		}
 		// Extract query parameters
-		const { status, type, clubId, page = '1', limit = '10', sortBy = 'createdAt', order = 'desc' } = c.req.query();
+		const { status, type, clubId, page = '1', limit = '10', sortBy = 'createdAt', order = 'desc', fields } = c.req.query();
 		const conditions = [eq(activities.organizerId, organizer.id), eq(activities.isActive, true)];
 		if (clubId) {
 			conditions.push(eq(activities.clubId, clubId));
@@ -115,6 +115,13 @@ app.get('/activities', async (c) => {
 			.limit(limitNum)
 			.offset(offset)
 			.execute();
+
+		// Parse fields param if present
+		let fieldList: string[] | null = null;
+		if (fields && typeof fields === 'string') {
+			fieldList = fields.split(',').map(f => f.trim()).filter(Boolean);
+		}
+
 		// For recurring activities, fetch schedules and calculate dynamic status
 		const enrichedActivities = await Promise.all(
 			activitiesList.map(async (activity) => {
@@ -146,7 +153,12 @@ app.get('/activities', async (c) => {
 					};
 				}
 				// Omit id fields from each activity
-				return omitActivityIds(result);
+				let clean = omitActivityIds(result);
+				// If fieldList is present, filter the fields
+				if (fieldList) {
+					clean = Object.fromEntries(Object.entries(clean).filter(([k]) => fieldList!.includes(k)));
+				}
+				return clean;
 			})
 		);
 		return c.json({ activities: enrichedActivities }, 200);
@@ -202,215 +214,6 @@ app.get('/activities/:slug', async (c) => {
 		return c.json({ activity: { ...omitActivityIds(result), club: cleanClub } }, 200);
 	} catch (error) {
 		console.error('Error fetching activity:', error);
-		return c.json({ error: 'Internal Server Error' }, 500);
-	}
-});
-
-// -----------------------------
-// POST /activities
-// Create a new activity
-// For one-time: requires startDateTime and endDateTime
-// For recurring: requires schedules array
-// -----------------------------
-app.post('/activities', async (c) => {
-	try {
-		const organizer = c.get('organizer');
-
-		if (!organizer) {
-			return c.json({ error: 'No organizer found for this domain' }, 404);
-		}
-		const body = await c.req.json();
-
-		const {
-			clubSlug,
-			name,
-			slug,
-			description,
-			additionalInfo,
-			venueName,
-			mapUrl,
-			imageUrls,
-			videoUrls,
-			type = 'one-time',
-			startDateTime,
-			endDateTime,
-			schedules, // For recurring activities: [{ dayOfWeek, startTime, endTime }]
-			availableSlots,
-			registrationFee = 0,
-			isRegistrationOpen = true,
-		} = body;
-
-		// Validation
-		if (!clubSlug || !name || !slug) {
-			return c.json({ error: 'Missing required fields: clubSlug, name, slug' }, 400);
-		}
-
-		// Lookup club by slug
-		const [club] = await db
-			.select()
-			.from(clubs)
-			.where(eq(clubs.slug, clubSlug))
-			.limit(1)
-			.execute();
-
-		if (!club) return c.json({ error: 'Club not found' }, 404);
-
-		// Type-specific validation
-		if (type === 'one-time') {
-			if (!startDateTime || !endDateTime) {
-				return c.json({ error: 'one-time activities require startDateTime and endDateTime' }, 400);
-			}
-		} else if (type === 'recurring') {
-			if (!schedules || !Array.isArray(schedules) || schedules.length === 0) {
-				return c.json({ error: 'recurring activities require schedules array' }, 400);
-			}
-		}
-
-		// Generate unique ID
-		const activityId = generateSecureRandomId();
-
-		// Determine initial status
-		let initialStatus: 'upcoming' | 'live' | 'completed' = 'upcoming';
-		if (type === 'one-time') {
-			const now = new Date();
-			const start = new Date(startDateTime);
-			const end = new Date(endDateTime);
-
-			if (now >= start && now <= end) {
-				initialStatus = 'live';
-			} else if (now > end) {
-				initialStatus = 'completed'; // Past events are completed
-			}
-		}
-
-		// Insert activity
-		const [newActivity] = await db
-			.insert(activities)
-			.values({
-				id: activityId,
-				clubId: club.id,
-				name,
-				slug,
-				description: description || null,
-				additionalInfo: additionalInfo || {},
-				venueName: venueName || null,
-				mapUrl: mapUrl || null,
-				imageUrls: imageUrls || [],
-				videoUrls: videoUrls || [],
-				type,
-				startDateTime: type === 'one-time' ? new Date(startDateTime) : null,
-				endDateTime: type === 'one-time' ? new Date(endDateTime) : null,
-				availableSlots: availableSlots || 0,
-				bookedSlots: 0,
-				registrationFee,
-				isRegistrationOpen,
-				status: initialStatus,
-				isActive: true,
-			})
-			.returning()
-			.execute();
-
-		// For recurring activities, insert schedules
-		if (type === 'recurring' && schedules && schedules.length > 0) {
-			const scheduleValues = schedules.map((schedule: any) => ({
-				id: generateSecureRandomId(),
-				activityId,
-				dayOfWeek: schedule.dayOfWeek,
-				startTime: new Date(schedule.startTime),
-				endTime: new Date(schedule.endTime),
-			}));
-
-			await db.insert(activitySchedules).values(scheduleValues).execute();
-		}
-
-		return c.json({ activity: omitActivityIds(newActivity), message: 'Activity created successfully' }, 201);
-	} catch (error) {
-		console.error('Error creating activity:', error);
-		return c.json({ error: 'Internal Server Error' }, 500);
-	}
-});
-
-// -----------------------------
-// PUT /activities/:id
-// Update an existing activity
-// -----------------------------
-app.put('/activities/:slug', async (c) => {
-	try {
-		const organizer = c.get('organizer');
-
-		if (!organizer) {
-			return c.json({ error: 'No organizer found for this domain' }, 404);
-		}
-
-		const activitySlug = c.req.param('slug');
-		if (!activitySlug || typeof activitySlug !== 'string') return c.json({ error: 'Invalid activity slug' }, 400);
-
-		const body = await c.req.json();
-
-		// Verify activity belongs to organizer
-		const activityQuery = await db
-			.select()
-			.from(activities)
-			.innerJoin(clubs, eq(clubs.id, activities.clubId))
-			.where(and(eq(activities.slug, activitySlug), eq(clubs.organizerId, organizer.id)))
-			.limit(1)
-			.execute();
-
-		if (!activityQuery[0]) return c.json({ error: 'Activity not found' }, 404);
-
-		const existingActivity = activityQuery[0].activities;
-
-		// Build update object
-		const updateData: any = {
-			updatedAt: new Date(),
-		};
-
-		// Allow updating specific fields
-		if (body.name !== undefined) updateData.name = body.name;
-		if (body.slug !== undefined) updateData.slug = body.slug;
-		if (body.description !== undefined) updateData.description = body.description;
-		if (body.additionalInfo !== undefined) updateData.additionalInfo = body.additionalInfo;
-		if (body.venueName !== undefined) updateData.venueName = body.venueName;
-		if (body.mapUrl !== undefined) updateData.mapUrl = body.mapUrl;
-		if (body.imageUrls !== undefined) updateData.imageUrls = body.imageUrls;
-		if (body.videoUrls !== undefined) updateData.videoUrls = body.videoUrls;
-		if (body.availableSlots !== undefined) updateData.availableSlots = body.availableSlots;
-		if (body.registrationFee !== undefined) updateData.registrationFee = body.registrationFee;
-		if (body.isRegistrationOpen !== undefined) updateData.isRegistrationOpen = body.isRegistrationOpen;
-		if (body.status !== undefined) updateData.status = body.status;
-		if (body.isActive !== undefined) updateData.isActive = body.isActive;
-
-		// Handle type-specific fields
-		if (existingActivity.type === 'one-time') {
-			if (body.startDateTime !== undefined) updateData.startDateTime = new Date(body.startDateTime);
-			if (body.endDateTime !== undefined) updateData.endDateTime = new Date(body.endDateTime);
-		}
-
-		// Update activity
-		const [updatedActivity] = await db.update(activities).set(updateData).where(eq(activities.slug, activitySlug)).returning().execute();
-
-		// Handle schedule updates for recurring activities
-		if (existingActivity.type === 'recurring' && body.schedules) {
-			// Delete existing schedules
-			await db.delete(activitySchedules).where(eq(activitySchedules.activityId, existingActivity.id)).execute();
-
-			// Insert new schedules
-			if (body.schedules.length > 0) {
-				const scheduleValues = body.schedules.map((schedule: any) => ({
-					id: generateSecureRandomId(),
-					activityId: existingActivity.id,
-					dayOfWeek: schedule.dayOfWeek,
-					startTime: new Date(schedule.startTime),
-					endTime: new Date(schedule.endTime),
-				}));
-
-				await db.insert(activitySchedules).values(scheduleValues).execute();
-			}
-		}
-
-		return c.json({ activity: omitActivityIds(updatedActivity), message: 'Activity updated successfully' }, 200);
-	} catch (error) {
-		console.error('Error updating activity:', error);
 		return c.json({ error: 'Internal Server Error' }, 500);
 	}
 });

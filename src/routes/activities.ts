@@ -93,9 +93,10 @@ app.get('/activities', async (c) => {
 		if (clubId) {
 			conditions.push(eq(activities.clubId, clubId));
 		}
+		// Note: status filtering will be done after calculating dynamic status
+		const requestedStatus = status;
 		const validStatuses = ['upcoming', 'live', 'completed', 'canceled'] as const;
-		if (status && validStatuses.includes(status as (typeof validStatuses)[number]))
-			conditions.push(eq(activities.status, status as (typeof validStatuses)[number]));
+		
 		const validTypes = ['one-time', 'recurring'] as const;
 		if (type && validTypes.includes(type as (typeof validTypes)[number]))
 			conditions.push(eq(activities.type, type as (typeof validTypes)[number]));
@@ -104,15 +105,19 @@ app.get('/activities', async (c) => {
 		const offset = (pageNum - 1) * limitNum;
 		const sortMap: Record<string, any> = {
 			createdAt: activities.createdAt,
+			startDateTime: activities.startDateTime,
 		};
 		const sortColumn = sortMap[sortBy] || activities.createdAt;
 		const sortOrder = order.toLowerCase() === 'asc' ? asc(sortColumn) : desc(sortColumn);
+		
+		// Fetch more than needed since we'll filter by dynamic status after
+		const fetchLimit = requestedStatus ? limitNum * 10 : limitNum;
 		const activitiesList = await db
 			.select()
 			.from(activities)
 			.where(and(...conditions))
 			.orderBy(sortOrder)
-			.limit(limitNum)
+			.limit(fetchLimit)
 			.offset(offset)
 			.execute();
 
@@ -123,7 +128,7 @@ app.get('/activities', async (c) => {
 		}
 
 		// For recurring activities, fetch schedules and calculate dynamic status
-		const enrichedActivities = await Promise.all(
+		let enrichedActivities = await Promise.all(
 			activitiesList.map(async (activity) => {
 				let result = { ...activity };
 				if (activity.type === 'recurring') {
@@ -161,7 +166,27 @@ app.get('/activities', async (c) => {
 				return clean;
 			})
 		);
-		return c.json({ activities: enrichedActivities }, 200);
+
+		// Filter by dynamic status if requested
+		if (requestedStatus && validStatuses.includes(requestedStatus as any)) {
+			enrichedActivities = enrichedActivities.filter(
+				(activity) => activity.currentStatus === requestedStatus
+			);
+		}
+
+		// Sort by startDateTime if requested (after enrichment)
+		if (sortBy === 'startDateTime') {
+			enrichedActivities.sort((a, b) => {
+				const dateA = a.startDateTime ? new Date(a.startDateTime).getTime() : 0;
+				const dateB = b.startDateTime ? new Date(b.startDateTime).getTime() : 0;
+				return order.toLowerCase() === 'asc' ? dateA - dateB : dateB - dateA;
+			});
+		}
+
+		// Apply pagination after filtering
+		const paginatedActivities = enrichedActivities.slice(0, limitNum);
+
+		return c.json({ activities: paginatedActivities }, 200);
 	} catch (error) {
 		console.error('Error fetching activities:', error);
 		return c.json({ error: 'Internal Server Error' }, 500);

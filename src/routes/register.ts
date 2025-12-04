@@ -67,7 +67,9 @@ app.post('/activities/:slug/register', async (c) => {
 
 		// Determine payment method based on organizer's Razorpay credentials
 		// If both razorpayKeyId and razorpayKeySecret exist, use 'razorpay', otherwise 'manual'
-		const paymentMethod = organizer?.razorpayKeyId && organizer?.razorpayKeySecret ? 'razorpay' : 'manual';
+		const razorpayKeyId = organizer?.razorpayKeyId?.trim();
+		const razorpayKeySecret = organizer?.razorpayKeySecret?.trim();
+		const paymentMethod = razorpayKeyId && razorpayKeySecret ? 'razorpay' : 'manual';
 
 		// For recurring activities, check if registration is open
 		// For one-time activities, check status as well
@@ -94,7 +96,7 @@ app.post('/activities/:slug/register', async (c) => {
 			activityName: activity.name,
 			registrationFee,
 			isFree: registrationFee === 0,
-			paymentMethod: organizer?.razorpayKeyId && organizer?.razorpayKeySecret ? 'razorpay' : 'manual',
+			paymentMethod: razorpayKeyId && razorpayKeySecret ? 'razorpay' : 'manual',
 		});
 
 		// Find or create user
@@ -290,9 +292,11 @@ app.post('/activities/:slug/register', async (c) => {
 		if (paymentMethod === 'razorpay' && organizer) {
 			try {
 				console.log('🔑 Creating Razorpay order...');
+				console.log('Using Razorpay Key ID:', razorpayKeyId ? `${razorpayKeyId.substring(0, 10)}...` : 'MISSING');
+
 				const razorpayInstance = new Razorpay({
-					key_id: organizer.razorpayKeyId!,
-					key_secret: organizer.razorpayKeySecret!,
+					key_id: razorpayKeyId!,
+					key_secret: razorpayKeySecret!,
 				});
 
 				const razorpayOrder = await razorpayInstance.orders.create({
@@ -320,7 +324,7 @@ app.post('/activities/:slug/register', async (c) => {
 
 				paymentInfo = {
 					type: 'razorpay',
-					razorpayKeyId: organizer.razorpayKeyId, // Pass Razorpay Key ID to frontend
+					razorpayKeyId: razorpayKeyId, // Pass Razorpay Key ID to frontend
 					orderId: razorpayOrderId, // Use actual Razorpay order ID
 					amount: registrationFee * additionalTickets,
 					currency: 'INR',

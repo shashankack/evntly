@@ -116,9 +116,9 @@ app.post('/activities/:slug/register', async (c) => {
 				lastName,
 				phone: phone || null,
 				email: email || null,
+				passwordHash: null,
 				isActive: true,
 			};
-			// Don't include passwordHash at all - let the database handle it
 			[user] = await db
 				.insert(users)
 				.values(userValues)

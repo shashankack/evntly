@@ -99,14 +99,36 @@ app.post('/activities/:slug/register', async (c) => {
 			paymentMethod: razorpayKeyId && razorpayKeySecret ? 'razorpay' : 'manual',
 		});
 
-		// Find or create user
-		let [user] =
-			(await db
+		// Find or create user - check by email OR phone
+		let user;
+		
+		if (email && phone) {
+			// If both are provided, check for either match
+			[user] = await db
 				.select()
 				.from(users)
-				.where(email ? eq(users.email, email) : eq(users.phone, phone!))
+				.where(
+					sql`${users.email} = ${email} OR ${users.phone} = ${phone}`
+				)
 				.limit(1)
-				.execute()) || [];
+				.execute();
+		} else if (email) {
+			// Only email provided
+			[user] = await db
+				.select()
+				.from(users)
+				.where(eq(users.email, email))
+				.limit(1)
+				.execute();
+		} else if (phone) {
+			// Only phone provided
+			[user] = await db
+				.select()
+				.from(users)
+				.where(eq(users.phone, phone))
+				.limit(1)
+				.execute();
+		}
 
 		if (!user) {
 			const userId = generateSecureRandomId();
@@ -355,6 +377,23 @@ app.post('/activities/:slug/register', async (c) => {
 		);
 	} catch (error) {
 		console.error('Error during registration:', error);
+		
+		// Handle specific database errors
+		if (error instanceof Error) {
+			const errorMessage = error.message.toLowerCase();
+			
+			// Check for duplicate key violations
+			if (errorMessage.includes('duplicate key') || errorMessage.includes('unique constraint')) {
+				if (errorMessage.includes('phone')) {
+					return c.json({ error: 'This phone number is already registered. Please use a different number.' }, 400);
+				}
+				if (errorMessage.includes('email')) {
+					return c.json({ error: 'This email is already registered. Please use a different email.' }, 400);
+				}
+				return c.json({ error: 'An account with these details already exists.' }, 400);
+			}
+		}
+		
 		return c.json({ error: 'Internal Server Error' }, 500);
 	}
 });

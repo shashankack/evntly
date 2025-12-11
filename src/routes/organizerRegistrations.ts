@@ -1,7 +1,7 @@
 // src/routes/organizerRegistrations.ts
 import { Hono } from 'hono';
 import { db } from '../db/client';
-import { activities, activityRegistrations, users, organizers } from '../db/schema';
+import { activities, activityRegistrations, users, organizers, payments } from '../db/schema';
 import { eq, and, inArray } from 'drizzle-orm';
 
 const app = new Hono();
@@ -59,7 +59,25 @@ app.get('/organizer/registrations', async (c) => {
     .from(activityRegistrations)
     .where(inArray(activityRegistrations.activityId, activityIds))
     .execute();
-  const userIds = regs.map((r) => r.userId).filter((id): id is string => typeof id === 'string');
+  
+  // Get only registrations with completed payments
+  const registrationIds = regs.map((r) => r.id).filter(Boolean);
+  const completedPayments = registrationIds.length > 0
+    ? await db.select().from(payments)
+        .where(and(
+          inArray(payments.registrationId, registrationIds),
+          eq(payments.status, 'completed')
+        ))
+        .execute()
+    : [];
+  
+  // Create a set of registration IDs with completed payments
+  const completedRegIds = new Set(completedPayments.map(p => p.registrationId));
+  
+  // Filter registrations to only those with completed payments
+  const regsWithCompletedPayments = regs.filter(r => completedRegIds.has(r.id));
+  
+  const userIds = regsWithCompletedPayments.map((r) => r.userId).filter((id): id is string => typeof id === 'string');
   const usersList = userIds.length > 0
     ? await db.select().from(users).where(inArray(users.id, userIds as string[])).execute()
     : [];
@@ -70,7 +88,7 @@ app.get('/organizer/registrations', async (c) => {
   for (const a of orgActivities) {
     grouped[a.id] = { activity: a, users: [] };
   }
-  for (const r of regs) {
+  for (const r of regsWithCompletedPayments) {
     if (r.activityId && grouped[r.activityId] && r.userId && userMap[r.userId]) {
       grouped[r.activityId].users.push(userMap[r.userId]);
     }

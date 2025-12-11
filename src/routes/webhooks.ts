@@ -323,4 +323,142 @@ async function handlePaymentFailed(event: any) {
   }
 }
 
+// Payment verification endpoint (called by frontend after successful Razorpay payment)
+app.post('/verify-payment', async (c) => {
+  try {
+    const body = await c.req.json<{
+      razorpay_order_id: string;
+      razorpay_payment_id: string;
+      razorpay_signature: string;
+    }>();
+
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = body;
+
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return c.json({ error: 'Missing payment details' }, 400);
+    }
+
+    console.log('🔍 Verifying payment:', { razorpay_order_id, razorpay_payment_id });
+
+    // Find payment record by Razorpay order ID
+    const paymentWithOrganizer = await db
+      .select({
+        payment: payments,
+        organizer: organizers,
+        registration: activityRegistrations,
+        activity: activities,
+      })
+      .from(payments)
+      .innerJoin(activityRegistrations, eq(payments.registrationId, activityRegistrations.id))
+      .innerJoin(activities, eq(activityRegistrations.activityId, activities.id))
+      .innerJoin(organizers, eq(activities.organizerId, organizers.id))
+      .where(eq(payments.providerPaymentId, razorpay_order_id))
+      .limit(1)
+      .execute();
+
+    if (!paymentWithOrganizer.length) {
+      console.error('❌ Payment record not found for order:', razorpay_order_id);
+      return c.json({ error: 'Payment record not found' }, 404);
+    }
+
+    const { payment, organizer, registration, activity } = paymentWithOrganizer[0];
+
+    // Verify signature
+    const razorpayKeySecret = organizer.razorpayKeySecret;
+    if (!razorpayKeySecret) {
+      console.error('❌ Razorpay key secret not configured for organizer');
+      return c.json({ error: 'Payment gateway not configured' }, 500);
+    }
+
+    const expectedSignature = createHmac('sha256', razorpayKeySecret)
+      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+      .digest('hex');
+
+    if (expectedSignature !== razorpay_signature) {
+      console.error('❌ Invalid payment signature');
+      return c.json({ error: 'Invalid payment signature' }, 400);
+    }
+
+    console.log('✅ Payment signature verified');
+
+    // Check if already processed
+    if (payment.status === 'completed') {
+      console.log('ℹ️ Payment already processed');
+      return c.json({ success: true, message: 'Payment already verified' }, 200);
+    }
+
+    // Update payment status to completed
+    await db
+      .update(payments)
+      .set({
+        status: 'completed',
+        updatedAt: new Date(),
+      })
+      .where(eq(payments.id, payment.id))
+      .execute();
+
+    console.log('✅ Payment status updated to completed');
+
+    // Update activity booked slots
+    const previousBookedSlots = activity.bookedSlots || 0;
+    await db
+      .update(activities)
+      .set({
+        bookedSlots: sql`${activities.bookedSlots} + ${registration.ticketCount}`,
+      })
+      .where(eq(activities.id, activity.id))
+      .execute();
+
+    console.log(`✅ Seats updated for activity "${activity.name}": ${previousBookedSlots} -> ${previousBookedSlots + registration.ticketCount}`);
+
+    // Update registration timestamp
+    await db
+      .update(activityRegistrations)
+      .set({
+        updatedAt: new Date(),
+      })
+      .where(eq(activityRegistrations.id, registration.id))
+      .execute();
+
+    // Get user details for email
+    if (registration.userId) {
+      const [user] = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, registration.userId))
+        .limit(1)
+        .execute();
+
+      if (user?.email && organizer) {
+        console.log('📧 Sending payment confirmation email...');
+        const { sendRegistrationEmail } = await import('../utils/email');
+        
+        try {
+          await sendRegistrationEmail(
+            user.email,
+            `${user.firstName} ${user.lastName}`,
+            activity.name,
+            organizer.organizationName,
+            organizer.organizerEmail,
+            registration.ticketCount,
+            activity.venueName || undefined,
+            typeof activity.additionalInfo === 'string' ? activity.additionalInfo : undefined,
+            organizer.resendApiKey,
+            organizer.systemEmail
+          );
+          console.log('✅ Payment confirmation email sent');
+        } catch (emailError) {
+          console.error('❌ Failed to send confirmation email:', emailError);
+        }
+      }
+    }
+
+    return c.json({ success: true, message: 'Payment verified successfully' }, 200);
+
+  } catch (error) {
+    console.error('❌ Payment verification error:', error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
 export default app;

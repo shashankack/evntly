@@ -5,6 +5,7 @@ import { activities, activityRegistrations, activitySchedules, payments, users, 
 import { eq, and, sql } from 'drizzle-orm';
 import { generateSecureRandomId } from '../utils/idGenerator';
 import { sendRegistrationEmail } from '../utils/email';
+import { incrementBookedSlotsAndCloseIfFull } from '../utils/booking';
 import Razorpay from 'razorpay';
 
 const app = new Hono();
@@ -203,14 +204,7 @@ app.post('/activities/:slug/register', async (c) => {
 		if (registrationFee === 0) {
 			console.log('🎉 Processing FREE activity registration - completing immediately');
 
-			// Update booked slots immediately for free events
-			await db
-				.update(activities)
-				.set({
-					bookedSlots: sql`${activities.bookedSlots} + ${additionalTickets}`,
-				})
-				.where(eq(activities.id, activity.id))
-				.execute();
+			await incrementBookedSlotsAndCloseIfFull(activity.id, additionalTickets);
 
 			if (email && organizer) {
 				try {

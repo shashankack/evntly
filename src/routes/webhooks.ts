@@ -4,6 +4,7 @@ import { db } from '../db/client';
 import { payments, activityRegistrations, activities, organizers, users } from '../db/schema';
 import { eq, sql } from 'drizzle-orm';
 import { createHmac } from 'crypto';
+import { incrementBookedSlotsAndCloseIfFull } from '../utils/booking';
 
 const app = new Hono();
 
@@ -194,16 +195,14 @@ async function handlePaymentSuccess(event: any, paymentWithOrganizer: any) {
     }
 
     // ⚠️ CRITICAL: Update activity booked slots ONLY when order is fully paid
-    const previousBookedSlots = activity.bookedSlots || 0;
-    await db
-      .update(activities)
-      .set({
-        bookedSlots: sql`${activities.bookedSlots} + ${registration.ticketCount}`,
-      })
-      .where(eq(activities.id, activity.id))
-      .execute();
+      const bookingUpdate = await incrementBookedSlotsAndCloseIfFull(activity.id, registration.ticketCount);
 
-    console.log(`✅ Seats updated for activity "${activity.name}": ${previousBookedSlots} -> ${previousBookedSlots + registration.ticketCount} (added ${registration.ticketCount} tickets)`);
+      if (bookingUpdate) {
+        console.log(`✅ Seats updated for activity "${activity.name}": ${bookingUpdate.bookedSlots - registration.ticketCount} -> ${bookingUpdate.bookedSlots} (added ${registration.ticketCount} tickets)`);
+        if (!bookingUpdate.isRegistrationOpen && activity.isRegistrationOpen) {
+          console.log(`🔒 Registration closed for activity "${activity.name}" because capacity was reached`);
+        }
+      }
 
     // Update registration timestamp
     await db
@@ -418,16 +417,14 @@ app.post('/verify-payment', async (c) => {
         .execute();
 
     // Update activity booked slots
-    const previousBookedSlots = activity.bookedSlots || 0;
-    await db
-      .update(activities)
-      .set({
-        bookedSlots: sql`${activities.bookedSlots} + ${registration.ticketCount}`,
-      })
-      .where(eq(activities.id, activity.id))
-      .execute();
+      const bookingUpdate = await incrementBookedSlotsAndCloseIfFull(activity.id, registration.ticketCount);
 
-    console.log(`✅ Seats updated for activity "${activity.name}": ${previousBookedSlots} -> ${previousBookedSlots + registration.ticketCount}`);
+      if (bookingUpdate) {
+        console.log(`✅ Seats updated for activity "${activity.name}": ${bookingUpdate.bookedSlots - registration.ticketCount} -> ${bookingUpdate.bookedSlots}`);
+        if (!bookingUpdate.isRegistrationOpen && activity.isRegistrationOpen) {
+          console.log(`🔒 Registration closed for activity "${activity.name}" because capacity was reached`);
+        }
+      }
 
     // Update registration timestamp
     await db

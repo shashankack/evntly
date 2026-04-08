@@ -72,14 +72,16 @@ app.post('/activities/:slug/register', async (c) => {
 		const paymentMethod = razorpayKeyId && razorpayKeySecret ? 'razorpay' : 'manual';
 
 		// For recurring activities, check if registration is open
-		// For one-time activities, check status as well
+		// For one-time activities, use the event window instead of the stored status.
 		if (!activity.isRegistrationOpen) {
 			return c.json({ error: 'Registration closed for this activity' }, 400);
 		}
 
 		if (activity.type === 'one-time') {
-			// For one-time activities, check status
-			if (!['upcoming', 'live'].includes(activity.status)) {
+			const now = new Date();
+			const end = activity.endDateTime ? new Date(activity.endDateTime) : null;
+
+			if (end && now > end) {
 				return c.json({ error: 'Registration closed for this activity' }, 400);
 			}
 		} else if (activity.type === 'recurring') {
@@ -185,80 +187,15 @@ app.post('/activities/:slug/register', async (c) => {
 					id: registrationId,
 					  activityId: activity.id,
 					userId: user.id,
-					status: 'registered',
+					status: 'canceled',
 					ticketCount,
 				})
 				.returning();
 		}
 
-		console.log('📝 Registration completed. Now checking payment requirements...');
+		console.log('📝 Registration record created. Now checking payment requirements...');
 		console.log('Registration fee:', registrationFee, '| Is free?', registrationFee === 0);
 		console.log('User email:', email, '| Has organizer?', !!organizer);
-
-		// ------------------------
-		// Send confirmation email for ALL registrations
-		// ------------------------
-		if (email && organizer) {
-			console.log('\n========== EMAIL SENDING ATTEMPT ==========');
-			console.log('📧 Attempting to send confirmation email to:', email);
-			console.log('📋 Full Organizer details:', {
-				id: organizer.id,
-				organizationName: organizer.organizationName,
-				organizerEmail: organizer.organizerEmail,
-				systemEmail: organizer.systemEmail,
-				hasResendApiKey: !!organizer.resendApiKey,
-				resendApiKeyLength: organizer.resendApiKey?.length,
-				resendApiKeyPrefix: organizer.resendApiKey?.substring(0, 7),
-			});
-			console.log('🎫 Email parameters:', {
-				userEmail: email,
-				userName: `${firstName} ${lastName}`,
-				activityName: activity.name,
-				ticketCount,
-				venueName: activity.venueName,
-			});
-
-			try {
-				console.log('🚀 Calling sendRegistrationEmail function...');
-				const emailResult = await sendRegistrationEmail(
-					email,
-					`${firstName} ${lastName}`,
-					activity.name,
-					organizer.organizationName,
-					organizer.organizerEmail,
-					ticketCount,
-					activity.venueName || undefined,
-					typeof activity.additionalInfo === 'string' ? activity.additionalInfo : undefined,
-					organizer.resendApiKey, // Pass organizer's Resend API key
-					organizer.systemEmail // Pass organizer's system email
-				);
-
-				console.log('📬 Email send result:', JSON.stringify(emailResult, null, 2));
-
-				if (emailResult.success) {
-					console.log('✅✅✅ Registration confirmation email sent successfully!');
-					console.log('   → To:', email);
-					console.log('   → Message ID:', emailResult.messageId);
-				} else {
-					console.error('❌❌❌ Failed to send registration email!');
-					console.error('   → Error:', emailResult.error);
-				}
-				console.log('========== EMAIL SENDING COMPLETE ==========\n');
-			} catch (emailError) {
-				console.error('❌❌❌ EXCEPTION while sending registration email!');
-				console.error('Exception details:', emailError);
-				console.error('Exception stack:', (emailError as Error).stack);
-				console.log('========== EMAIL SENDING FAILED ==========\n');
-				// Don't fail the registration if email fails
-			}
-		} else {
-			if (!email) {
-				console.log('⚠️ No email provided by user, skipping confirmation email');
-			}
-			if (!organizer) {
-				console.log('⚠️ No organizer found, skipping confirmation email');
-			}
-		}
 
 		// ------------------------
 		// Free activity registration (no payment needed)
@@ -274,6 +211,26 @@ app.post('/activities/:slug/register', async (c) => {
 				})
 				.where(eq(activities.id, activity.id))
 				.execute();
+
+			if (email && organizer) {
+				try {
+					await sendRegistrationEmail(
+						email,
+						`${firstName} ${lastName}`,
+						activity.name,
+						organizer.organizationName,
+						organizer.organizerEmail,
+						ticketCount,
+						activity.venueName || undefined,
+						typeof activity.additionalInfo === 'string' ? activity.additionalInfo : undefined,
+						organizer.resendApiKey,
+						organizer.systemEmail
+					);
+					console.log('✅ Free registration confirmation email sent');
+				} catch (emailError) {
+					console.error('❌ Failed to send free registration email:', emailError);
+				}
+			}
 
 			return c.json(
 				{

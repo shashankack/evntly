@@ -148,6 +148,15 @@ async function handlePaymentSuccess(event: any, paymentWithOrganizer: any) {
       return;
     }
 
+      await db
+        .update(activityRegistrations)
+        .set({
+          status: 'registered',
+          updatedAt: new Date(),
+        })
+        .where(eq(activityRegistrations.id, registration.id))
+        .execute();
+
     // Get activity details
     if (!registration.activityId) {
       console.error('❌ No activity ID found for registration:', registration.id);
@@ -398,6 +407,15 @@ app.post('/verify-payment', async (c) => {
       .execute();
 
     console.log('✅ Payment status updated to completed');
+
+      await db
+        .update(activityRegistrations)
+        .set({
+          status: 'registered',
+          updatedAt: new Date(),
+        })
+        .where(eq(activityRegistrations.id, registration.id))
+        .execute();
 
     // Update activity booked slots
     const previousBookedSlots = activity.bookedSlots || 0;

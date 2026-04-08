@@ -111,14 +111,15 @@ app.get('/activities', async (c) => {
 		const sortOrder = order.toLowerCase() === 'asc' ? asc(sortColumn) : desc(sortColumn);
 		
 		// Fetch more than needed since we'll filter by dynamic status after
-		const fetchLimit = requestedStatus ? limitNum * 10 : limitNum;
+		const fetchLimit = requestedStatus ? Math.max(limitNum * 50, 500) : limitNum;
+		const fetchOffset = requestedStatus ? 0 : offset;
 		const activitiesList = await db
 			.select()
 			.from(activities)
 			.where(and(...conditions))
 			.orderBy(sortOrder)
 			.limit(fetchLimit)
-			.offset(offset)
+			.offset(fetchOffset)
 			.execute();
 
 		// Parse fields param if present
@@ -130,7 +131,7 @@ app.get('/activities', async (c) => {
 		// For recurring activities, fetch schedules and calculate dynamic status
 		let enrichedActivities = await Promise.all(
 			activitiesList.map(async (activity) => {
-				let result = { ...activity };
+				let result: any = { ...activity };
 				if (activity.type === 'recurring') {
 					const schedules = await db.select().from(activitySchedules).where(eq(activitySchedules.activityId, activity.id)).execute();
 					const dynamicStatus = getRecurringActivityStatus(schedules);
@@ -177,14 +178,21 @@ app.get('/activities', async (c) => {
 		// Sort by startDateTime if requested (after enrichment)
 		if (sortBy === 'startDateTime') {
 			enrichedActivities.sort((a, b) => {
-				const dateA = a.startDateTime ? new Date(a.startDateTime).getTime() : 0;
-				const dateB = b.startDateTime ? new Date(b.startDateTime).getTime() : 0;
+				// Keep activities without a concrete start date (for example recurring activities) at the end.
+				if (!a.startDateTime && !b.startDateTime) return 0;
+				if (!a.startDateTime) return 1;
+				if (!b.startDateTime) return -1;
+
+				const dateA = new Date(a.startDateTime).getTime();
+				const dateB = new Date(b.startDateTime).getTime();
 				return order.toLowerCase() === 'asc' ? dateA - dateB : dateB - dateA;
 			});
 		}
 
 		// Apply pagination after filtering
-		const paginatedActivities = enrichedActivities.slice(0, limitNum);
+		const paginatedActivities = requestedStatus
+			? enrichedActivities.slice(offset, offset + limitNum)
+			: enrichedActivities.slice(0, limitNum);
 
 		return c.json({ activities: paginatedActivities }, 200);
 	} catch (error) {

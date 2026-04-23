@@ -6,6 +6,7 @@ import { eq, and, sql } from 'drizzle-orm';
 import { generateSecureRandomId } from '../utils/idGenerator';
 import { sendRegistrationEmail } from '../utils/email';
 import { incrementBookedSlotsAndCloseIfFull } from '../utils/booking';
+import { computeRegistrationPricing, parsePricingConfig, SelectedAddOn } from '../utils/pricing';
 import Razorpay from 'razorpay';
 
 const app = new Hono();
@@ -23,9 +24,10 @@ app.post('/activities/:slug/register', async (c) => {
 			email?: string;
 			phone?: string;
 			ticketCount?: number;
+			addOns?: SelectedAddOn[];
 		}>();
 
-		const { firstName, lastName, email, phone, ticketCount = 1 } = body;
+		const { firstName, lastName, email, phone, ticketCount = 1, addOns = [] } = body;
 		if (!firstName || !lastName || (!email && !phone)) return c.json({ error: 'Missing required user details' }, 400);
 
 		// Validate ticketCount (max 4 tickets per registration)
@@ -94,11 +96,19 @@ app.post('/activities/:slug/register', async (c) => {
 		const bookedSlots = activity.bookedSlots ?? 0;
 		const availableSlots = activity.availableSlots ?? 0;
 		const registrationFee = activity.registrationFee ?? 0;
+		const pricingConfig = parsePricingConfig(activity.pricingConfig);
+		const feeDetails = computeRegistrationPricing({
+			registrationFeePaise: registrationFee,
+			pricingConfig,
+			baseCount: ticketCount,
+			selectedAddOns: addOns,
+		});
 
 		console.log('💰 Activity pricing details:', {
 			activityName: activity.name,
 			registrationFee,
-			isFree: registrationFee === 0,
+			totalAmountPaise: feeDetails.totalAmountPaise,
+			isFree: feeDetails.totalAmountPaise === 0,
 			paymentMethod: razorpayKeyId && razorpayKeySecret ? 'razorpay' : 'manual',
 		});
 
@@ -159,26 +169,30 @@ app.post('/activities/:slug/register', async (c) => {
 				.execute();
 
 		let registration;
-		let additionalTickets = ticketCount;
+		const seatCount = feeDetails.seatCount;
 
 		if (existing.length > 0) {
 			const current = existing[0];
 
 			// Prevent overbooking
-			if (bookedSlots + ticketCount > availableSlots) return c.json({ error: 'Not enough slots available' }, 400);
+			if (bookedSlots + seatCount > availableSlots) return c.json({ error: 'Not enough slots available' }, 400);
 
 			// Update existing registration ticket count
 			[registration] = await db
 				.update(activityRegistrations)
 				.set({
 					ticketCount: sql`${activityRegistrations.ticketCount} + ${ticketCount}`,
+					seatCount: sql`${activityRegistrations.seatCount} + ${seatCount}`,
+					totalAmountPaise: sql`${activityRegistrations.totalAmountPaise} + ${feeDetails.totalAmountPaise}`,
+					selectedAddOns: addOns.length ? addOns : current.selectedAddOns,
+					feeBreakdown: feeDetails,
 					updatedAt: new Date(),
 				})
 				.where(eq(activityRegistrations.id, current.id))
 				.returning();
 		} else {
 			// Prevent overbooking
-			if (bookedSlots + ticketCount > availableSlots) return c.json({ error: 'Not enough slots available' }, 400);
+			if (bookedSlots + seatCount > availableSlots) return c.json({ error: 'Not enough slots available' }, 400);
 
 			// Create new registration
 			const registrationId = generateSecureRandomId();
@@ -190,21 +204,25 @@ app.post('/activities/:slug/register', async (c) => {
 					userId: user.id,
 					status: 'canceled',
 					ticketCount,
+					seatCount,
+					totalAmountPaise: feeDetails.totalAmountPaise,
+					selectedAddOns: addOns,
+					feeBreakdown: feeDetails,
 				})
 				.returning();
 		}
 
 		console.log('📝 Registration record created. Now checking payment requirements...');
-		console.log('Registration fee:', registrationFee, '| Is free?', registrationFee === 0);
+		console.log('Registration fee:', registrationFee, '| Total amount paise:', feeDetails.totalAmountPaise, '| Is free?', feeDetails.totalAmountPaise === 0);
 		console.log('User email:', email, '| Has organizer?', !!organizer);
 
 		// ------------------------
 		// Free activity registration (no payment needed)
 		// ------------------------
-		if (registrationFee === 0) {
+		if (feeDetails.totalAmountPaise === 0) {
 			console.log('🎉 Processing FREE activity registration - completing immediately');
 
-			await incrementBookedSlotsAndCloseIfFull(activity.id, additionalTickets);
+			await incrementBookedSlotsAndCloseIfFull(activity.id, seatCount);
 
 			if (email && organizer) {
 				try {
@@ -215,6 +233,7 @@ app.post('/activities/:slug/register', async (c) => {
 						organizer.organizationName,
 						organizer.organizerEmail,
 						ticketCount,
+						feeDetails,
 						activity.venueName || undefined,
 						typeof activity.additionalInfo === 'string' ? activity.additionalInfo : undefined,
 						organizer.resendApiKey,
@@ -232,6 +251,7 @@ app.post('/activities/:slug/register', async (c) => {
 					user,
 					registration,
 					activity,
+					feeDetails,
 				},
 				200
 			);
@@ -254,10 +274,12 @@ app.post('/activities/:slug/register', async (c) => {
 			.values({
 				id: paymentId,
 				registrationId: registration.id,
-				amount: String((registrationFee / 100) * additionalTickets),
+				amount: String(feeDetails.totalAmountPaise / 100),
+				amountPaise: feeDetails.totalAmountPaise,
 				status: 'pending',
 				paymentMethod: paymentMethod,
 				providerPaymentId: null, // Will update after Razorpay order creation
+				feeBreakdown: feeDetails,
 			})
 			.returning();
 
@@ -273,7 +295,7 @@ app.post('/activities/:slug/register', async (c) => {
 				});
 
 				const razorpayOrder = await razorpayInstance.orders.create({
-					amount: registrationFee * additionalTickets, // amount in paise
+					amount: feeDetails.totalAmountPaise, // amount in paise
 					currency: 'INR',
 					receipt: paymentId,
 					notes: {
@@ -281,7 +303,9 @@ app.post('/activities/:slug/register', async (c) => {
 						activityName: activity.name,
 						registrationId: registration.id,
 						userId: user.id,
-						ticketCount: String(additionalTickets),
+						ticketCount: String(ticketCount),
+						seatCount: String(seatCount),
+						selectedAddOns: JSON.stringify(addOns),
 					},
 				});
 
@@ -299,7 +323,7 @@ app.post('/activities/:slug/register', async (c) => {
 					type: 'razorpay',
 					razorpayKeyId: razorpayKeyId, // Pass Razorpay Key ID to frontend
 					orderId: razorpayOrderId, // Use actual Razorpay order ID
-					amount: registrationFee * additionalTickets,
+					amount: feeDetails.totalAmountPaise,
 					currency: 'INR',
 				};
 			} catch (razorpayError) {
@@ -323,6 +347,7 @@ app.post('/activities/:slug/register', async (c) => {
 				registration,
 				payment,
 				paymentInfo,
+				feeDetails,
 			},
 			200
 		);
@@ -332,6 +357,10 @@ app.post('/activities/:slug/register', async (c) => {
 		// Handle specific database errors
 		if (error instanceof Error) {
 			const errorMessage = error.message.toLowerCase();
+
+			if (errorMessage.includes('unknown add-on') || errorMessage.includes('add-on quantity exceeds allowed maximum')) {
+				return c.json({ error: error.message }, 400);
+			}
 			
 			// Check for duplicate key violations
 			if (errorMessage.includes('duplicate key') || errorMessage.includes('unique constraint')) {

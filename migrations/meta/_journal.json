@@ -15,6 +15,13 @@
       "when": 1763393399135,
       "tag": "0001_silly_sentinel",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1763928000000,
+      "tag": "0002_add_pricing_config_and_addons",
+      "breakpoints": true
     }
   ]
 }

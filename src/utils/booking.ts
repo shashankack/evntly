@@ -2,7 +2,7 @@ import { db } from '../db/client';
 import { activities } from '../db/schema';
 import { eq, sql } from 'drizzle-orm';
 
-export async function incrementBookedSlotsAndCloseIfFull(activityId: string, ticketCount: number) {
+export async function incrementBookedSlotsAndCloseIfFull(activityId: string, seatCount: number) {
 	const [activity] = await db
 		.select()
 		.from(activities)
@@ -16,13 +16,13 @@ export async function incrementBookedSlotsAndCloseIfFull(activityId: string, tic
 
 	const bookedSlots = activity.bookedSlots ?? 0;
 	const availableSlots = activity.availableSlots ?? 0;
-	const nextBookedSlots = bookedSlots + ticketCount;
+	const nextBookedSlots = bookedSlots + seatCount;
 	const shouldCloseRegistration = availableSlots > 0 && nextBookedSlots >= availableSlots;
 
 	await db
 		.update(activities)
 		.set({
-			bookedSlots: sql`${activities.bookedSlots} + ${ticketCount}`,
+			bookedSlots: sql`${activities.bookedSlots} + ${seatCount}`,
 			isRegistrationOpen: shouldCloseRegistration ? false : activity.isRegistrationOpen,
 			updatedAt: new Date(),
 		})

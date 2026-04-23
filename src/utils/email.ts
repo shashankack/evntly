@@ -1,6 +1,7 @@
 // src/utils/email.ts
 import { Resend } from 'resend';
 import { getRegistrationEmailHTML, getRegistrationEmailSubject, getRegistrationEmailText } from '../templates/registrationEmail';
+import type { ComputedRegistrationPricing } from './pricing';
 
 // Note: Resend API key is fetched from the organizers table in the database
 // No default Resend client is initialized here to avoid deployment errors
@@ -64,6 +65,7 @@ export async function sendRegistrationEmail(
 	organizationName: string,
 	organizerEmail: string,
 	ticketCount: number,
+	feeDetails?: ComputedRegistrationPricing,
 	venueName?: string,
 	additionalInfo?: string,
 	organizerResendApiKey?: string | null,
@@ -82,6 +84,7 @@ export async function sendRegistrationEmail(
 		activityName,
 		organizationName,
 		ticketCount,
+		feeDetails,
 		registrationDate,
 		venueName,
 		additionalInfo,
@@ -92,6 +95,7 @@ export async function sendRegistrationEmail(
 		activityName,
 		organizationName,
 		ticketCount,
+		feeDetails,
 		registrationDate,
 		venueName,
 		additionalInfo,

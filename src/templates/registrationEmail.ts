@@ -1,17 +1,21 @@
 // src/templates/registrationEmail.ts
 
+import type { ComputedRegistrationPricing } from '../utils/pricing';
+
 export interface RegistrationEmailData {
 	userName: string;
 	activityName: string;
 	organizationName: string;
 	ticketCount: number;
+    feeDetails?: ComputedRegistrationPricing;
 	registrationDate: string;
 	venueName?: string;
 	additionalInfo?: string;
 }
 
 export function getRegistrationEmailHTML(data: RegistrationEmailData): string {
-	const { userName, activityName, organizationName, ticketCount, registrationDate, venueName, additionalInfo } = data;
+    const { userName, activityName, organizationName, ticketCount, feeDetails, registrationDate, venueName, additionalInfo } = data;
+    const lineItems = feeDetails?.lineItems || [];
 
 	return `
 <!DOCTYPE html>
@@ -117,6 +121,12 @@ export function getRegistrationEmailHTML(data: RegistrationEmailData): string {
                 <span class="label">Tickets:</span>
                 <span class="value">${ticketCount}</span>
             </div>
+            ${lineItems.length ? `
+            <div class="row">
+                <span class="label">Total Amount:</span>
+                <span class="value">₹${((feeDetails?.totalAmountPaise || 0) / 100).toFixed(2)}</span>
+            </div>
+            ` : ''}
             <div class="row">
                 <span class="label">Registration Date:</span>
                 <span class="value">${registrationDate}</span>
@@ -133,6 +143,15 @@ export function getRegistrationEmailHTML(data: RegistrationEmailData): string {
         <div style="background-color: #e7f3ff; border-left: 4px solid #2196F3; padding: 15px; margin: 20px 0; border-radius: 4px;">
             <strong>📌 Additional Information:</strong><br>
             ${additionalInfo}
+        </div>
+        ` : ''}
+
+        ${lineItems.length ? `
+        <div style="background-color: #f8f9fa; border-radius: 6px; padding: 16px; margin: 20px 0;">
+            <strong>Fee Breakdown:</strong>
+            <ul style="margin: 12px 0 0; padding-left: 18px;">
+                ${lineItems.map((item) => `<li>${item.label} x ${item.quantity} = ₹${(item.lineTotalPaise / 100).toFixed(2)}</li>`).join('')}
+            </ul>
         </div>
         ` : ''}
 
@@ -155,7 +174,8 @@ export function getRegistrationEmailSubject(activityName: string): string {
 }
 
 export function getRegistrationEmailText(data: RegistrationEmailData): string {
-	const { userName, activityName, organizationName, ticketCount, registrationDate, venueName, additionalInfo } = data;
+    const { userName, activityName, organizationName, ticketCount, feeDetails, registrationDate, venueName, additionalInfo } = data;
+    const lineItems = feeDetails?.lineItems || [];
 
 	return `
 Registration Confirmed!
@@ -167,10 +187,13 @@ Thank you for registering! Your registration has been confirmed.
 Activity: ${activityName}
 Organized by: ${organizationName}
 Tickets: ${ticketCount}
+${lineItems.length ? `Total Amount: ₹${((feeDetails?.totalAmountPaise || 0) / 100).toFixed(2)}` : ''}
 Registration Date: ${registrationDate}
 ${venueName ? `Venue: ${venueName}` : ''}
 
 ${additionalInfo ? `Additional Information:\n${additionalInfo}` : ''}
+
+${lineItems.length ? `Fee Breakdown:\n${lineItems.map((item) => `- ${item.label} x ${item.quantity} = ₹${(item.lineTotalPaise / 100).toFixed(2)}`).join('\n')}` : ''}
 
 Please keep this email for your records. You may need to present it at the event.
 

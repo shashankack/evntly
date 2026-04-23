@@ -195,10 +195,11 @@ async function handlePaymentSuccess(event: any, paymentWithOrganizer: any) {
     }
 
     // ⚠️ CRITICAL: Update activity booked slots ONLY when order is fully paid
-      const bookingUpdate = await incrementBookedSlotsAndCloseIfFull(activity.id, registration.ticketCount);
+      const seatCount = registration.seatCount ?? registration.ticketCount;
+      const bookingUpdate = await incrementBookedSlotsAndCloseIfFull(activity.id, seatCount);
 
       if (bookingUpdate) {
-        console.log(`✅ Seats updated for activity "${activity.name}": ${bookingUpdate.bookedSlots - registration.ticketCount} -> ${bookingUpdate.bookedSlots} (added ${registration.ticketCount} tickets)`);
+        console.log(`✅ Seats updated for activity "${activity.name}": ${bookingUpdate.bookedSlots - seatCount} -> ${bookingUpdate.bookedSlots} (added ${seatCount} seats)`);
         if (!bookingUpdate.isRegistrationOpen && activity.isRegistrationOpen) {
           console.log(`🔒 Registration closed for activity "${activity.name}" because capacity was reached`);
         }
@@ -237,6 +238,16 @@ async function handlePaymentSuccess(event: any, paymentWithOrganizer: any) {
           organizer.organizationName || 'Event Organizer',
           organizer.organizerEmail,
           registration.ticketCount,
+          {
+            baseCount: registration.ticketCount,
+            baseSeatCount: registration.seatCount ?? registration.ticketCount,
+            seatCount,
+            totalAmountPaise: registration.totalAmountPaise ?? 0,
+            baseAmountPaise: registration.feeBreakdown?.baseAmountPaise ?? 0,
+            addonAmountPaise: registration.feeBreakdown?.addonAmountPaise ?? 0,
+            selectedAddOns: registration.selectedAddOns ?? [],
+            lineItems: registration.feeBreakdown?.lineItems ?? [],
+          },
           activity.venueName || undefined,
           typeof activity.additionalInfo === 'string' ? activity.additionalInfo : undefined,
           organizer.resendApiKey,
@@ -417,10 +428,11 @@ app.post('/verify-payment', async (c) => {
         .execute();
 
     // Update activity booked slots
-      const bookingUpdate = await incrementBookedSlotsAndCloseIfFull(activity.id, registration.ticketCount);
+      const seatCount = registration.seatCount ?? registration.ticketCount;
+      const bookingUpdate = await incrementBookedSlotsAndCloseIfFull(activity.id, seatCount);
 
       if (bookingUpdate) {
-        console.log(`✅ Seats updated for activity "${activity.name}": ${bookingUpdate.bookedSlots - registration.ticketCount} -> ${bookingUpdate.bookedSlots}`);
+        console.log(`✅ Seats updated for activity "${activity.name}": ${bookingUpdate.bookedSlots - seatCount} -> ${bookingUpdate.bookedSlots}`);
         if (!bookingUpdate.isRegistrationOpen && activity.isRegistrationOpen) {
           console.log(`🔒 Registration closed for activity "${activity.name}" because capacity was reached`);
         }
@@ -456,6 +468,16 @@ app.post('/verify-payment', async (c) => {
             organizer.organizationName,
             organizer.organizerEmail,
             registration.ticketCount,
+            {
+              baseCount: registration.ticketCount,
+              baseSeatCount: registration.seatCount ?? registration.ticketCount,
+              seatCount,
+              totalAmountPaise: registration.totalAmountPaise ?? 0,
+              baseAmountPaise: registration.feeBreakdown?.baseAmountPaise ?? 0,
+              addonAmountPaise: registration.feeBreakdown?.addonAmountPaise ?? 0,
+              selectedAddOns: registration.selectedAddOns ?? [],
+              lineItems: registration.feeBreakdown?.lineItems ?? [],
+            },
             activity.venueName || undefined,
             typeof activity.additionalInfo === 'string' ? activity.additionalInfo : undefined,
             organizer.resendApiKey,

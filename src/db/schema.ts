@@ -70,6 +70,7 @@ export const activities = pgTable('activities', {
 	imageUrls: jsonb('image_urls').default('[]'),
 	videoUrls: jsonb('video_urls').default('[]'),
 	type: ActivityType('type').default('one-time').notNull(), // 'one-time' or 'recurring'
+	pricingConfig: jsonb('pricing_config').default('{}'),
 	startDateTime: timestamp('start_date_time'), // Only used when type='one-time'
 	endDateTime: timestamp('end_date_time'), // Only used when type='one-time'
 	availableSlots: integer('available_slots').default(0),
@@ -102,6 +103,10 @@ export const activityRegistrations = pgTable('activity_registrations', {
 	userId: uuid('user_id').references(() => users.id),
 	status: RegistrationStatus('status').default('registered').notNull(),
 	ticketCount: integer('ticket_count').default(1).notNull(),
+	seatCount: integer('seat_count').default(1).notNull(),
+	totalAmountPaise: integer('total_amount_paise').default(0).notNull(),
+	selectedAddOns: jsonb('selected_add_ons').default('[]'),
+	feeBreakdown: jsonb('fee_breakdown').default('{}'),
 	registeredAt: timestamp('registered_at').defaultNow().notNull(),
 	updatedAt: timestamp('updated_at').defaultNow().notNull(),
 	deletedAt: timestamp('deleted_at'),
@@ -123,9 +128,11 @@ export const payments = pgTable('payments', {
 	id: uuid('id').defaultRandom().primaryKey(),
 	registrationId: uuid('registration_id').references(() => activityRegistrations.id),
 	amount: numeric('amount', { precision: 10, scale: 2 }).notNull(),
+	amountPaise: integer('amount_paise').default(0).notNull(),
 	status: PaymentStatus('status').default('pending').notNull(),
 	paymentMethod: varchar('payment_method', { length: 50 }).notNull(),
 	providerPaymentId: varchar('provider_payment_id', { length: 100 }),
+	feeBreakdown: jsonb('fee_breakdown').default('{}'),
 	createdAt: timestamp('created_at').defaultNow().notNull(),
 	updatedAt: timestamp('updated_at').defaultNow().notNull(),
 	deletedAt: timestamp('deleted_at'),

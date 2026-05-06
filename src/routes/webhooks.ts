@@ -311,6 +311,36 @@ async function handlePaymentFailed(event: any) {
       return;
     }
 
+    // If this registration already has a completed payment from a later retry,
+    // do not roll the registration back to canceled.
+    if (payment.registrationId) {
+      const [latestSuccessfulPayment] = await db
+        .select({ id: payments.id })
+        .from(payments)
+        .where(and(
+          eq(payments.registrationId, payment.registrationId),
+          eq(payments.status, 'completed')
+        ))
+        .limit(1)
+        .execute();
+
+      if (latestSuccessfulPayment) {
+        console.log('ℹ️ Ignoring failed webhook because registration already has a completed payment:', payment.registrationId);
+
+        // Keep the failed payment row for audit/history, but do not cancel the registration.
+        await db
+          .update(payments)
+          .set({
+            status: 'failed',
+            updatedAt: new Date(),
+          })
+          .where(eq(payments.id, payment.id))
+          .execute();
+
+        return;
+      }
+    }
+
     // Update payment status to failed
     await db
       .update(payments)

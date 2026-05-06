@@ -71,7 +71,8 @@ app.get('/organizer/registrations', async (c) => {
         .execute()
     : [];
   
-  // Create a set of registration IDs with completed payments
+  // Create a map of registration IDs to payment IDs
+  const paymentMap = Object.fromEntries(completedPayments.map(p => [p.registrationId, p.id]));
   const completedRegIds = new Set(completedPayments.map(p => p.registrationId));
   
   // Filter registrations to only those with completed payments
@@ -84,16 +85,19 @@ app.get('/organizer/registrations', async (c) => {
   // Group registrations by activity
   const activityMap = Object.fromEntries(orgActivities.map((a) => [a.id, a]));
   const userMap = Object.fromEntries(usersList.map((u) => [u.id, u]));
-  const grouped: Record<string, { activity: typeof orgActivities[0], users: typeof usersList }> = {};
+  const grouped: Record<string, { activity: typeof orgActivities[0], users: Array<any> }> = {};
   for (const a of orgActivities) {
     grouped[a.id] = { activity: a, users: [] };
   }
   for (const r of regsWithCompletedPayments) {
     if (r.activityId && grouped[r.activityId] && r.userId && userMap[r.userId]) {
-      grouped[r.activityId].users.push(userMap[r.userId]);
+      grouped[r.activityId].users.push({
+        ...userMap[r.userId],
+        paymentId: paymentMap[r.id] || null
+      });
     }
   }
-  // Return JSON output: Event name, then users (name, phone, email)
+  // Return JSON output: Event name, then users (name, phone, email, paymentId)
   const result = Object.values(grouped).map(group => ({
     activity: {
       ...group.activity
@@ -103,7 +107,8 @@ app.get('/organizer/registrations', async (c) => {
       firstName: u.firstName,
       lastName: u.lastName,
       phone: u.phone,
-      email: u.email
+      email: u.email,
+      paymentId: u.paymentId
     }))
   }));
   // Get organizer info

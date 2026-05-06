@@ -46,6 +46,39 @@ async function cleanupAbandonedPayments(now: Date) {
     return stalePayments.length;
 }
 
+async function repairCanceledRegistrations(now: Date) {
+    const canceledRegistrations = await db
+        .select({ id: activityRegistrations.id })
+        .from(activityRegistrations)
+        .where(and(
+            eq(activityRegistrations.status, 'canceled'),
+            sql`exists (
+                select 1
+                from ${payments}
+                where ${payments.registrationId} = ${activityRegistrations.id}
+                  and ${payments.status} = 'completed'
+            )`
+        ))
+        .execute();
+
+    if (!canceledRegistrations.length) {
+        return 0;
+    }
+
+    const registrationIds = canceledRegistrations.map((registration) => registration.id);
+
+    await db
+        .update(activityRegistrations)
+        .set({
+            status: 'registered',
+            updatedAt: now,
+        })
+        .where(inArray(activityRegistrations.id, registrationIds))
+        .execute();
+
+    return canceledRegistrations.length;
+}
+
 // GET /cron/update-activity-status
 // Requires x-cron-secret header
 app.get('/cron/update-activity-status', async (c) => {
@@ -79,6 +112,27 @@ app.get('/cron/update-activity-status', async (c) => {
         console.log(`Cleaned up ${cleanedUp} abandoned pending payment(s)`);
     }
     return c.json({ message: 'Activity statuses updated' });
+});
+
+// GET /cron/repair-registration-statuses
+// Requires x-cron-secret header
+app.get('/cron/repair-registration-statuses', async (c) => {
+    const secret = c.req.header('x-cron-secret');
+    if (!secret || secret !== process.env.CRON_SECRET) {
+        return c.json({ error: 'Unauthorized' }, 401);
+    }
+
+    const now = new Date();
+    const repaired = await repairCanceledRegistrations(now);
+
+    if (repaired > 0) {
+        console.log(`Repaired ${repaired} canceled registration(s) with completed payments`);
+    }
+
+    return c.json({
+        message: 'Registration statuses repaired',
+        repaired,
+    });
 });
 
 export default app;

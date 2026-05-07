@@ -186,6 +186,7 @@ app.post('/activities/:slug/register', async (c) => {
 					totalAmountPaise: sql`${activityRegistrations.totalAmountPaise} + ${feeDetails.totalAmountPaise}`,
 					selectedAddOns: addOns.length ? addOns : current.selectedAddOns,
 					feeBreakdown: feeDetails,
+					status: feeDetails.totalAmountPaise === 0 && current.status === 'pending' ? 'registered' : current.status,
 					updatedAt: new Date(),
 				})
 				.where(eq(activityRegistrations.id, current.id))
@@ -202,7 +203,7 @@ app.post('/activities/:slug/register', async (c) => {
 					id: registrationId,
 					  activityId: activity.id,
 					userId: user.id,
-					status: 'canceled',
+					status: feeDetails.totalAmountPaise === 0 ? 'registered' : 'pending',
 					ticketCount,
 					seatCount,
 					totalAmountPaise: feeDetails.totalAmountPaise,
@@ -221,6 +222,26 @@ app.post('/activities/:slug/register', async (c) => {
 		// ------------------------
 		if (feeDetails.totalAmountPaise === 0) {
 			console.log('🎉 Processing FREE activity registration - completing immediately');
+
+			// Update registration status to registered if it's still pending
+			if (registration.status !== 'registered') {
+				await db
+					.update(activityRegistrations)
+					.set({
+						status: 'registered',
+						updatedAt: new Date(),
+					})
+					.where(eq(activityRegistrations.id, registration.id))
+					.execute();
+
+				// Refresh the registration object
+				[registration] = await db
+					.select()
+					.from(activityRegistrations)
+					.where(eq(activityRegistrations.id, registration.id))
+					.limit(1)
+					.execute();
+			}
 
 			await incrementBookedSlotsAndCloseIfFull(activity.id, seatCount);
 

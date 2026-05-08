@@ -95,16 +95,10 @@ export function parsePricingConfig(value: unknown): ActivityPricingConfig {
 					if (!id || !label || !Number.isFinite(pricePaise) || pricePaise < 0) {
 						return null;
 					}
-					return {
+					const addOn: ActivityPricingAddOn = {
 						id,
 						label,
 						pricePaise,
-						seatCount:
-							item.seatCount !== undefined
-								? Math.max(1, toInteger(item.seatCount, 1))
-								: item.seat_count !== undefined
-									? Math.max(1, toInteger(item.seat_count, 1))
-									: undefined,
 						description: typeof item.description === 'string' ? item.description : undefined,
 						maxQuantity:
 							item.maxQuantity !== undefined
@@ -112,9 +106,19 @@ export function parsePricingConfig(value: unknown): ActivityPricingConfig {
 								: item.max_quantity !== undefined
 									? Math.max(1, toInteger(item.max_quantity, 1))
 									: undefined,
-					} satisfies ActivityPricingAddOn;
+					};
+					const seatCountValue =
+						item.seatCount !== undefined
+							? Math.max(1, toInteger(item.seatCount, 1))
+							: item.seat_count !== undefined
+								? Math.max(1, toInteger(item.seat_count, 1))
+								: undefined;
+					if (seatCountValue !== undefined) {
+						addOn.seatCount = seatCountValue;
+					}
+					return addOn;
 				})
-				.filter((addOn): addOn is ActivityPricingAddOn => Boolean(addOn))
+				.filter((addOn): addOn is ActivityPricingAddOn => addOn !== null)
 			: undefined,
 	};
 }
@@ -132,6 +136,7 @@ export function computeRegistrationPricing(params: {
 	const selections = Array.isArray(params.selectedAddOns) ? params.selectedAddOns : [];
 	const addOnDefinitions = pricingConfig.addOns ?? [];
 	const addOnLookup = new Map(addOnDefinitions.map((addOn) => [addOn.id, addOn]));
+	const seatCount = baseSeatCount * baseCount;
 
 	const baseAmountPaise = registrationFeePaise * baseCount;
 	const lineItems: FeeLineItem[] = [
@@ -186,7 +191,6 @@ export function computeRegistrationPricing(params: {
 	}).filter((selection): selection is NonNullable<typeof selection> => Boolean(selection));
 
 	const addonAmountPaise = selectedAddOns.reduce((total, item) => total + item.lineTotalPaise, 0);
-	const seatCount = lineItems.reduce((total, item) => total + item.seatCount, 0);
 	const totalAmountPaise = baseAmountPaise + addonAmountPaise;
 
 	return {

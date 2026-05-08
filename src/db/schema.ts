@@ -2,7 +2,7 @@ import { pgTable, serial, integer, bigint, varchar, timestamp, jsonb, boolean, n
 
 // -------------------- ENUMS --------------------
 export const ActivityStatus = pgEnum('activity_status', ['upcoming', 'live', 'completed', 'canceled']);
-export const RegistrationStatus = pgEnum('registration_status', ['registered', 'canceled', 'attended']);
+export const RegistrationStatus = pgEnum('registration_status', ['pending', 'registered', 'canceled', 'attended']);
 export const PaymentStatus = pgEnum('payment_status', ['pending', 'completed', 'failed']);
 export const NotificationStatus = pgEnum('notification_status', ['pending', 'sent', 'failed']);
 export const ActivityType = pgEnum('activity_type', ['one-time', 'recurring']);

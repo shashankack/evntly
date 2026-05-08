@@ -2,7 +2,11 @@
 import { Hono } from 'hono';
 import { db } from '../db/client';
 import { activities, activityRegistrations, users, organizers, payments } from '../db/schema';
-import { eq, and, inArray } from 'drizzle-orm';
+import { eq, and, inArray, sql } from 'drizzle-orm';
+import { generateSecureRandomId } from '../utils/idGenerator';
+import { computeRegistrationPricing, parsePricingConfig } from '../utils/pricing';
+import type { SelectedAddOn } from '../utils/pricing';
+import { incrementBookedSlotsAndCloseIfFull } from '../utils/booking';
 
 const app = new Hono();
 
@@ -71,8 +75,9 @@ app.get('/organizer/registrations', async (c) => {
         .execute()
     : [];
   
-  // Create a map of registration IDs to payment IDs
+  // Create a map of registration IDs to payment metadata
   const paymentMap = Object.fromEntries(completedPayments.map(p => [p.registrationId, p.id]));
+  const paymentMethodMap = Object.fromEntries(completedPayments.map(p => [p.registrationId, p.paymentMethod]));
   const completedRegIds = new Set(completedPayments.map(p => p.registrationId));
   
   // Filter registrations to only those with completed payments
@@ -93,7 +98,9 @@ app.get('/organizer/registrations', async (c) => {
     if (r.activityId && grouped[r.activityId] && r.userId && userMap[r.userId]) {
       grouped[r.activityId].users.push({
         ...userMap[r.userId],
-        paymentId: paymentMap[r.id] || null
+        paymentId: paymentMap[r.id] || null,
+        paymentMethod: paymentMethodMap[r.id] || null,
+        registrationStatus: r.status,
       });
     }
   }
@@ -108,7 +115,9 @@ app.get('/organizer/registrations', async (c) => {
       lastName: u.lastName,
       phone: u.phone,
       email: u.email,
-      paymentId: u.paymentId
+      paymentId: u.paymentId,
+      paymentMethod: u.paymentMethod || null,
+      registrationStatus: u.registrationStatus || null
     }))
   }));
   // Get organizer info
@@ -119,8 +128,154 @@ app.get('/organizer/registrations', async (c) => {
       organizationName: organizer.organizationName,
       organizerEmail: organizer.organizerEmail
     },
+    activities: orgActivities,
     registrations: result
   });
+});
+
+// POST /organizer/registrations - manually add an offline registration
+app.post('/organizer/registrations', async (c) => {
+  const auth = c.req.header('authorization');
+  if (!auth || !auth.startsWith('Bearer ')) {
+    return c.json({ error: 'Missing or invalid Authorization header.' }, 401);
+  }
+
+  let organizerId;
+  try {
+    const payload = jwt.verify(auth.replace('Bearer ', ''), JWT_SECRET) as { organizerId: string };
+    organizerId = payload.organizerId;
+  } catch (e) {
+    return c.json({ error: 'Invalid or expired token.' }, 401);
+  }
+
+  try {
+    const body = await c.req.json<{
+      activityId: string;
+      firstName: string;
+      lastName: string;
+      email?: string;
+      phone?: string;
+      ticketCount?: number;
+      addOns?: SelectedAddOn[];
+    }>();
+
+    const { activityId, firstName, lastName, email, phone, ticketCount = 1, addOns = [] } = body;
+
+    if (!activityId || !firstName || !lastName || (!email && !phone)) {
+      return c.json({ error: 'Missing required fields: activityId, firstName, lastName, and at least one contact method' }, 400);
+    }
+
+    if (ticketCount < 1 || ticketCount > 4) {
+      return c.json({ error: 'Ticket count must be between 1 and 4' }, 400);
+    }
+
+    const [activity] = await db
+      .select()
+      .from(activities)
+      .where(and(eq(activities.id, activityId), eq(activities.organizerId, organizerId)))
+      .limit(1)
+      .execute();
+
+    if (!activity) {
+      return c.json({ error: 'Activity not found for this organizer' }, 404);
+    }
+
+    const pricingConfig = parsePricingConfig(activity.pricingConfig);
+    const feeDetails = computeRegistrationPricing({
+      registrationFeePaise: activity.registrationFee ?? 0,
+      pricingConfig,
+      baseCount: ticketCount,
+      selectedAddOns: addOns,
+    });
+
+    let user;
+    if (email && phone) {
+      [user] = await db
+        .select()
+        .from(users)
+        .where(sql`${users.email} = ${email} OR ${users.phone} = ${phone}`)
+        .limit(1)
+        .execute();
+    } else if (email) {
+      [user] = await db.select().from(users).where(eq(users.email, email)).limit(1).execute();
+    } else if (phone) {
+      [user] = await db.select().from(users).where(eq(users.phone, phone)).limit(1).execute();
+    }
+
+    if (!user) {
+      const userId = generateSecureRandomId();
+      [user] = await db
+        .insert(users)
+        .values({
+          id: userId,
+          firstName,
+          lastName,
+          email: email || null,
+          phone: phone || null,
+          passwordHash: null,
+          isActive: true,
+        })
+        .returning();
+    }
+
+    const existing = await db
+      .select()
+      .from(activityRegistrations)
+      .where(and(eq(activityRegistrations.activityId, activity.id), eq(activityRegistrations.userId, user.id)))
+      .limit(1)
+      .execute();
+
+    if (existing.length > 0) {
+      return c.json({ error: 'This user is already registered for this activity' }, 409);
+    }
+
+    const registrationId = generateSecureRandomId();
+    const [registration] = await db
+      .insert(activityRegistrations)
+      .values({
+        id: registrationId,
+        activityId: activity.id,
+        userId: user.id,
+        status: 'registered',
+        ticketCount,
+        seatCount: feeDetails.seatCount,
+        totalAmountPaise: feeDetails.totalAmountPaise,
+        selectedAddOns: addOns,
+        feeBreakdown: feeDetails,
+      })
+      .returning();
+
+    const paymentId = generateSecureRandomId();
+    const [payment] = await db
+      .insert(payments)
+      .values({
+        id: paymentId,
+        registrationId: registration.id,
+        amount: String(feeDetails.totalAmountPaise / 100),
+        amountPaise: feeDetails.totalAmountPaise,
+        status: 'completed',
+        paymentMethod: 'manual',
+        providerPaymentId: null,
+        feeBreakdown: feeDetails,
+      })
+      .returning();
+
+    await incrementBookedSlotsAndCloseIfFull(activity.id, feeDetails.seatCount);
+
+    return c.json(
+      {
+        message: 'Manual registration added successfully',
+        user,
+        registration,
+        payment,
+        feeDetails,
+      },
+      201
+    );
+  } catch (error) {
+    console.error('Error creating manual registration:', error);
+    return c.json({ error: 'Internal Server Error' }, 500);
+  }
 });
 
 export default app;

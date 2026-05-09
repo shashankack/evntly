@@ -97,6 +97,7 @@ app.get('/organizer/registrations', async (c) => {
   for (const r of regsWithCompletedPayments) {
     if (r.activityId && grouped[r.activityId] && r.userId && userMap[r.userId]) {
       grouped[r.activityId].users.push({
+        registrationId: r.id,
         ...userMap[r.userId],
         paymentId: paymentMap[r.id] || null,
         paymentMethod: paymentMethodMap[r.id] || null,
@@ -110,6 +111,7 @@ app.get('/organizer/registrations', async (c) => {
       ...group.activity
     },
     users: group.users.map(u => ({
+      registrationId: u.registrationId,
       id: u.id,
       firstName: u.firstName,
       lastName: u.lastName,
@@ -120,6 +122,8 @@ app.get('/organizer/registrations', async (c) => {
       registrationStatus: u.registrationStatus || null
     }))
   }));
+
+  // (attendance route moved out of this handler)
   // Get organizer info
   const [organizer] = await db.select().from(organizers).where(eq(organizers.id, organizerId)).limit(1).execute();
   return c.json({
@@ -131,6 +135,68 @@ app.get('/organizer/registrations', async (c) => {
     activities: orgActivities,
     registrations: result
   });
+});
+
+// PATCH /organizer/registrations/:registrationId/attendance - mark a registration as attended
+app.patch('/organizer/registrations/:registrationId/attendance', async (c) => {
+  const auth = c.req.header('authorization');
+  if (!auth || !auth.startsWith('Bearer ')) {
+    return c.json({ error: 'Missing or invalid Authorization header.' }, 401);
+  }
+
+  let organizerId;
+  try {
+    const payload = jwt.verify(auth.replace('Bearer ', ''), JWT_SECRET) as { organizerId: string };
+    organizerId = payload.organizerId;
+  } catch (e) {
+    return c.json({ error: 'Invalid or expired token.' }, 401);
+  }
+
+  try {
+    const registrationId = c.req.param('registrationId');
+    if (!registrationId) {
+      return c.json({ error: 'Missing registrationId' }, 400);
+    }
+
+    const [registrationRow] = await db
+      .select({
+        registration: activityRegistrations,
+        activity: activities,
+      })
+      .from(activityRegistrations)
+      .innerJoin(activities, eq(activityRegistrations.activityId, activities.id))
+      .where(and(eq(activityRegistrations.id, registrationId), eq(activities.organizerId, organizerId)))
+      .limit(1)
+      .execute();
+
+    if (!registrationRow) {
+      return c.json({ error: 'Registration not found for this organizer' }, 404);
+    }
+
+    if (registrationRow.registration.status === 'attended') {
+      return c.json({
+        message: 'Registration already marked as attended',
+        registration: registrationRow.registration,
+      }, 200);
+    }
+
+    const [updatedRegistration] = await db
+      .update(activityRegistrations)
+      .set({
+        status: 'attended',
+        updatedAt: new Date(),
+      })
+      .where(eq(activityRegistrations.id, registrationId))
+      .returning();
+
+    return c.json({
+      message: 'Attendance marked successfully',
+      registration: updatedRegistration,
+    }, 200);
+  } catch (error) {
+    console.error('Error marking attendance:', error);
+    return c.json({ error: 'Internal Server Error' }, 500);
+  }
 });
 
 // POST /organizer/registrations - manually add an offline registration
